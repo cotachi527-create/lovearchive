@@ -5,7 +5,9 @@ import {
   DailyState,
   DEFAULT_PREFERENCES,
   GENRE_KEYS,
+  normalizeImageUrls,
   Preferences,
+  withSyncedImages,
 } from "./types";
 
 const KEYS = {
@@ -32,11 +34,25 @@ function writeJson<T>(key: string, value: T) {
 }
 
 export function getCollection(): CollectionItem[] {
-  return readJson<CollectionItem[]>(KEYS.collection, []);
+  const items = readJson<CollectionItem[]>(KEYS.collection, []);
+  return items.map((item) => {
+    const imageUrls = normalizeImageUrls(item);
+    return withSyncedImages({
+      ...item,
+      genre: GENRE_KEYS.includes(item.genre) ? item.genre : "art",
+      imageUrls,
+      officialUrl: item.officialUrl ?? null,
+      memo: item.memo ?? "",
+      tags: Array.isArray(item.tags) ? item.tags : [],
+    });
+  });
 }
 
 export function saveCollection(items: CollectionItem[]) {
-  writeJson(KEYS.collection, items);
+  writeJson(
+    KEYS.collection,
+    items.map((item) => withSyncedImages(item)),
+  );
 }
 
 export function getPreferences(): Preferences {
@@ -86,6 +102,7 @@ export type EnrichCache = Record<
   {
     imageUrl: string | null;
     imageCredit: string | null;
+    imageSource?: string | null;
     bio: string;
     latest: string;
     sourceUrls: { label: string; url: string }[];
@@ -101,6 +118,6 @@ export function saveEnrichCache(cache: EnrichCache) {
   writeJson(KEYS.enrichCache, cache);
 }
 
-export function cacheKey(artist: string, title: string) {
-  return `${artist.trim()}::${title.trim()}`.toLowerCase();
+export function cacheKey(artist: string, title: string, genre?: string) {
+  return `${(genre || "").trim()}::${artist.trim()}::${title.trim()}`.toLowerCase();
 }
