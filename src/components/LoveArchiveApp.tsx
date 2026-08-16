@@ -887,7 +887,9 @@ export default function LoveArchiveApp() {
           <p className="text-xs tracking-[0.2em] text-rose-300/80 mb-2">
             LOVEARCHIVE
           </p>
-          <h1 className="text-3xl font-black text-white mb-1">ラブアカ</h1>
+          <h1 className="mb-1 bg-gradient-to-r from-rose-300 via-rose-200 to-violet-300 bg-clip-text text-3xl font-black text-transparent">
+            ラブアカ
+          </h1>
           <p className="text-sm text-[var(--muted)]">
             自分の好きを思い出す（活用）する
           </p>
@@ -908,10 +910,11 @@ export default function LoveArchiveApp() {
               key={key}
               type="button"
               onClick={() => setPanel(key)}
+              aria-current={panel === key ? "page" : undefined}
               className={`rounded-full px-3 py-2 text-sm font-medium transition ${
                 panel === key
-                  ? "bg-rose-500 text-white"
-                  : "bg-white/5 text-[var(--muted)] hover:bg-white/10"
+                  ? "bg-rose-500 text-white shadow-lg shadow-rose-500/25"
+                  : "bg-white/5 text-[var(--muted)] hover:bg-white/10 hover:text-white"
               }`}
             >
               {label}
@@ -944,7 +947,7 @@ export default function LoveArchiveApp() {
                 type="button"
                 disabled={loadingPiece}
                 onClick={() => void drawPiece(hasDrawnToday ? "extra" : "main")}
-                className="group relative h-28 w-28 rounded-full bg-gradient-to-br from-rose-500 to-violet-600 shadow-lg shadow-rose-500/30 transition hover:scale-[1.03] active:scale-95 disabled:opacity-60"
+                className="group relative h-28 w-28 rounded-full bg-gradient-to-br from-rose-500 to-violet-600 ring-1 ring-white/15 transition [animation:la-breathe_4s_ease-in-out_infinite] hover:scale-[1.03] active:scale-95 disabled:opacity-60 motion-reduce:[animation:none] motion-reduce:shadow-lg motion-reduce:shadow-rose-500/30"
               >
                 <span className="text-center text-sm font-bold leading-tight text-white">
                   {loadingPiece ? (
@@ -974,7 +977,7 @@ export default function LoveArchiveApp() {
             </div>
 
             {current && (
-              <article className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
+              <article className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-xl shadow-black/40">
                 {enrichment?.imageUrl ? (
                   <div className="relative aspect-square w-full">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1135,7 +1138,7 @@ export default function LoveArchiveApp() {
                     href={item.url || "#"}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-3 transition hover:border-rose-400/30"
+                    className="flex gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-3 transition hover:border-rose-400/30 hover:bg-white/[0.03]"
                   >
                     <div
                       className={`flex h-9 min-w-9 shrink-0 items-center justify-center rounded-lg px-1 text-[9px] font-bold leading-tight text-center ${GENRE_STYLE[item.genre] || "bg-white/10 text-white"}`}

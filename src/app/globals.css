@@ -19,3 +19,30 @@ body {
 * {
   box-sizing: border-box;
 }
+
+::selection {
+  background: rgba(244, 63, 94, 0.35);
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: 2px solid rgba(244, 63, 94, 0.6);
+  outline-offset: 2px;
+}
+
+/* Windows の明るいスクロールバーがダークUIで浮くのを防ぐ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* 「今日の一枚」ボタンの呼吸するような光 */
+@keyframes la-breathe {
+  0%,
+  100% {
+    box-shadow: 0 10px 30px -5px rgba(244, 63, 94, 0.35);
+  }
+  50% {
+    box-shadow: 0 10px 40px -2px rgba(139, 92, 246, 0.5);
+  }
+}

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Noto_Sans_JP } from "next/font/google";
 import "./globals.css";
 
@@ -11,6 +11,10 @@ export const metadata: Metadata = {
   title: "LoveArchive（ラブアカ）",
   description:
     "自分の好きを思い出す（活用）する。好きの棚を、毎日ひらくWebツール。",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0f0a12",
 };
 
 export default function RootLayout({
