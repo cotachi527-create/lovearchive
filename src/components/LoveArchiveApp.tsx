@@ -987,9 +987,15 @@ export default function LoveArchiveApp() {
                 type="button"
                 disabled={loadingPiece}
                 onClick={() => void drawPiece(hasDrawnToday ? "extra" : "main")}
-                className="group relative h-28 w-28 rounded-full bg-gradient-to-br from-rose-500 to-violet-600 ring-1 ring-white/15 transition [animation:la-breathe_4s_ease-in-out_infinite] hover:scale-[1.03] active:scale-95 disabled:opacity-60 motion-reduce:[animation:none] motion-reduce:shadow-lg motion-reduce:shadow-rose-500/30"
+                className={`group relative rounded-full bg-gradient-to-br from-rose-500 to-violet-600 ring-1 ring-white/15 transition [animation:la-breathe_4s_ease-in-out_infinite] hover:scale-[1.03] active:scale-95 disabled:opacity-60 motion-reduce:[animation:none] motion-reduce:shadow-lg motion-reduce:shadow-rose-500/30 ${
+                  current ? "h-16 w-16" : "h-28 w-28"
+                }`}
               >
-                <span className="text-center text-sm font-bold leading-tight text-white">
+                <span
+                  className={`text-center font-bold leading-tight text-white ${
+                    current ? "text-[10px]" : "text-sm"
+                  }`}
+                >
                   {loadingPiece ? (
                     "取得中…"
                   ) : hasDrawnToday ? (
@@ -1007,13 +1013,15 @@ export default function LoveArchiveApp() {
                   )}
                 </span>
               </button>
-              <p className="mt-3 text-xs text-[var(--muted)]">
-                {collection.length === 0
-                  ? "まずコレクションを登録"
-                  : hasDrawnToday
-                    ? "今日の一枚は決定済み。追加で引けます"
-                    : "最近出していない作品を優先してランダム"}
-              </p>
+              {collection.length === 0 ? (
+                <p className="mt-3 text-xs text-[var(--muted)]">
+                  まずコレクションを登録
+                </p>
+              ) : !hasDrawnToday && !current ? (
+                <p className="mt-3 text-xs text-[var(--muted)]">
+                  最近出していない作品を優先してランダム
+                </p>
+              ) : null}
             </div>
 
             {current && (
