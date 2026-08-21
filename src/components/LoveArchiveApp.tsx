@@ -884,6 +884,46 @@ export default function LoveArchiveApp() {
     <div className="min-h-screen px-4 py-6 md:py-10">
       <div className="mx-auto max-w-lg">
         <header className="mb-8 text-center">
+          <svg
+            viewBox="0 0 200 200"
+            className="mx-auto mb-2 h-14 w-14 drop-shadow-lg"
+            aria-hidden="true"
+          >
+            <defs>
+              <linearGradient id="laFolderBack" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#E91E63" />
+                <stop offset="60%" stopColor="#7B1FA2" />
+                <stop offset="100%" stopColor="#1E88E5" />
+              </linearGradient>
+              <linearGradient id="laFolderFront" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#FF2A7A" />
+                <stop offset="50%" stopColor="#8E24AA" />
+                <stop offset="100%" stopColor="#2979FF" />
+              </linearGradient>
+            </defs>
+            <g transform="translate(4, 18)">
+              <path
+                d="M 25,25 L 75,25 Q 85,25 92,35 L 105,52 Q 110,58 120,58 L 180,58 Q 192,58 192,70 L 192,145 Q 192,155 180,155 L 25,155 Q 15,155 15,145 L 15,37 Q 15,25 25,25 Z"
+                fill="url(#laFolderBack)"
+                opacity="0.95"
+              />
+              <path
+                d="M 25,48 L 175,48 Q 190,48 185,65 L 165,148 Q 162,158 150,158 L 18,158 Q 6,158 10,146 L 22,58 Q 24,48 25,48 Z"
+                fill="url(#laFolderFront)"
+              />
+              <path
+                d="M 26,50 L 173,50"
+                stroke="rgba(255,255,255,0.4)"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              />
+              <path
+                d="M 98,82 C 98,72 88,65 77,65 C 66,65 59,73 59,81 C 59,73 52,65 41,65 C 30,65 20,72 20,82 C 20,102 59,128 59,128 C 59,128 98,102 98,82 Z"
+                transform="translate(42, 5)"
+                fill="#FFFFFF"
+              />
+            </g>
+          </svg>
           <p className="text-xs tracking-[0.2em] text-rose-300/80 mb-2">
             LOVEARCHIVE
           </p>
