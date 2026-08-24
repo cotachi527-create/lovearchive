@@ -104,6 +104,9 @@ export default function LoveArchiveApp() {
   const [loadingSuggest, setLoadingSuggest] = useState(false);
   const [suggestNote, setSuggestNote] = useState<string | null>(null);
   const [selectedWorks, setSelectedWorks] = useState<string[]>([]);
+  const [imageResults, setImageResults] = useState<
+    { url: string; note?: string }[]
+  >([]);
   const [memoDraft, setMemoDraft] = useState("");
   const [tagDraft, setTagDraft] = useState("");
   const [favDraft, setFavDraft] = useState<Record<Genre, string>>({
@@ -117,18 +120,35 @@ export default function LoveArchiveApp() {
 
   const suggestWorks = async () => {
     const a = artist.trim();
+    const t = title.trim();
     if (!a || loadingSuggest) return;
     setLoadingSuggest(true);
     setSuggestNote(null);
     setSuggestions([]);
     setSelectedWorks([]);
+    setImageResults([]);
     try {
       const res = await fetch("/api/suggest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ artist: a, genre: itemGenre }),
+        body: JSON.stringify({
+          artist: a,
+          title: t || undefined,
+          genre: itemGenre,
+        }),
       });
       const data = await res.json();
+      if (t) {
+        // 作品名あり → 画像候補モード
+        const images = (data.images || []) as { url: string; note?: string }[];
+        setImageResults(images);
+        if (images.length === 0) {
+          setSuggestNote(
+            "画像が見つかりませんでした。URL貼り付けやスクショ登録もお試しください。",
+          );
+        }
+        return;
+      }
       const items = (data.items || []) as {
         title: string;
         note?: string;
@@ -153,6 +173,7 @@ export default function LoveArchiveApp() {
     setSuggestions([]);
     setSuggestNote(null);
     setSelectedWorks([]);
+    setImageResults([]);
     setTitle("");
     setItemGenre("art");
     formImagesRef.current = [];
@@ -1498,9 +1519,16 @@ export default function LoveArchiveApp() {
                     disabled={!artist.trim() || loadingSuggest}
                     className="shrink-0 rounded-xl bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-40"
                   >
-                    {loadingSuggest ? "検索中…" : "作品を探す"}
+                    {loadingSuggest
+                      ? "検索中…"
+                      : title.trim()
+                        ? "画像を探す"
+                        : "作品を探す"}
                   </button>
                 </div>
+                <p className="text-[10px] text-[var(--muted)]">
+                  作家名だけ → 作品の候補 / 作家名＋作品名 → その作品の画像候補
+                </p>
                 {suggestNote && (
                   <p className="text-[11px] text-[var(--muted)]">{suggestNote}</p>
                 )}
@@ -1594,11 +1622,74 @@ export default function LoveArchiveApp() {
                     </div>
                   </div>
                 )}
+                {imageResults.length > 0 && (
+                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-2.5">
+                    <p className="mb-1.5 text-[10px] text-violet-200/80">
+                      タップで「画像」欄に追加されます（複数選択OK・もう一度タップで解除）
+                    </p>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {imageResults.map((im) => {
+                        const addedIndex = formImages.indexOf(im.url);
+                        const added = addedIndex >= 0;
+                        return (
+                          <button
+                            key={im.url}
+                            type="button"
+                            onClick={() => {
+                              if (added) removeFormImage(addedIndex);
+                              else addFormImage(im.url);
+                            }}
+                            className={`relative overflow-hidden rounded-lg border text-left transition ${
+                              added
+                                ? "border-rose-400 bg-rose-500/20"
+                                : "border-white/10 bg-black/20 hover:border-rose-400/40"
+                            }`}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={im.url}
+                              alt=""
+                              loading="lazy"
+                              className="h-20 w-full bg-black/30 object-cover"
+                              onError={(e) => {
+                                const btn = e.currentTarget.closest("button");
+                                if (btn) btn.style.display = "none";
+                              }}
+                            />
+                            {im.note && (
+                              <span className="block px-1.5 py-0.5 text-[9px] leading-tight text-[var(--muted)]">
+                                {im.note}
+                              </span>
+                            )}
+                            {added && (
+                              <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] text-white">
+                                ✓
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setImageResults([])}
+                      className="mt-2 rounded-full border border-white/15 px-3 py-1.5 text-[11px] text-[var(--muted)] hover:text-white"
+                    >
+                      閉じる
+                    </button>
+                  </div>
+                )}
                 <input
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="作品名"
                   className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-rose-400/50"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void suggestWorks();
+                    }
+                  }}
                 />
                 <div
                   onPaste={handlePasteImages}

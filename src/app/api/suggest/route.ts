@@ -5,8 +5,12 @@ export const maxDuration = 30;
 
 type SuggestItem = { title: string; note?: string; imageUrl?: string };
 
+type ImageCandidate = { url: string; note?: string };
+
 type SuggestBody = {
   artist: string;
+  /** 指定時は「この作品の画像候補」を返す */
+  title?: string;
   genre?: Genre;
 };
 
@@ -19,6 +23,18 @@ export async function POST(req: NextRequest) {
 
   if (!artist) {
     return NextResponse.json({ error: "artist が必要です" }, { status: 400 });
+  }
+
+  // 作品名あり → その作品の画像候補を返すモード
+  const title = (body.title || "").trim();
+  if (title) {
+    let images: ImageCandidate[] = [];
+    try {
+      images = await findWorkImages(artist, title, genre);
+    } catch {
+      images = [];
+    }
+    return NextResponse.json({ images: dedupeImages(images).slice(0, 12) });
   }
 
   // 1) Gemini（キーがあれば最優先。ジャンル問わず質が高い）
@@ -63,6 +79,176 @@ function dedupe(items: SuggestItem[]): SuggestItem[] {
     }
   }
   return Array.from(seen.values());
+}
+
+function dedupeImages(images: ImageCandidate[]): ImageCandidate[] {
+  const seen = new Set<string>();
+  const out: ImageCandidate[] = [];
+  for (const img of images) {
+    if (!img.url || seen.has(img.url)) continue;
+    seen.add(img.url);
+    out.push(img);
+  }
+  return out;
+}
+
+/** 作家名＋作品名から画像候補を集める */
+async function findWorkImages(
+  artist: string,
+  title: string,
+  genre: Genre,
+): Promise<ImageCandidate[]> {
+  const out: ImageCandidate[] = [];
+  try {
+    if (genre === "book") out.push(...(await bookWorkImages(artist, title)));
+    else if (genre === "anime") out.push(...(await aniListWorkImages(title)));
+    else if (genre === "music")
+      out.push(...(await musicWorkImages(artist, title)));
+  } catch {
+    // try next
+  }
+  try {
+    out.push(...(await wikipediaWorkImages(artist, title)));
+  } catch {
+    // ignore
+  }
+  return out;
+}
+
+async function bookWorkImages(
+  artist: string,
+  title: string,
+): Promise<ImageCandidate[]> {
+  const out: ImageCandidate[] = [];
+  try {
+    const q = `intitle:"${title}" inauthor:"${artist}"`;
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8&printType=books`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      for (const v of data?.items || []) {
+        const thumb =
+          v?.volumeInfo?.imageLinks?.thumbnail ||
+          v?.volumeInfo?.imageLinks?.smallThumbnail;
+        if (thumb) {
+          out.push({
+            url: String(thumb).replace("http://", "https://"),
+            note: "Google Books",
+          });
+        }
+      }
+    }
+  } catch {
+    // try next
+  }
+  try {
+    const url = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(artist)}&limit=6&fields=cover_i`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      for (const d of data?.docs || []) {
+        if (typeof d?.cover_i === "number") {
+          out.push({
+            url: `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`,
+            note: "Open Library",
+          });
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return out;
+}
+
+async function aniListWorkImages(title: string): Promise<ImageCandidate[]> {
+  const query = `query ($search: String) {
+  Page(perPage: 6) {
+    media(search: $search) {
+      title { native romaji }
+      coverImage { large }
+      bannerImage
+    }
+  }
+}`;
+  const res = await fetch("https://graphql.anilist.co", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ query, variables: { search: title } }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const out: ImageCandidate[] = [];
+  for (const m of data?.data?.Page?.media || []) {
+    const name = m?.title?.native || m?.title?.romaji || "";
+    if (m?.coverImage?.large) {
+      out.push({ url: m.coverImage.large, note: name });
+    }
+    if (m?.bannerImage) {
+      out.push({ url: m.bannerImage, note: name });
+    }
+  }
+  return out;
+}
+
+async function musicWorkImages(
+  artist: string,
+  title: string,
+): Promise<ImageCandidate[]> {
+  const headers = {
+    "User-Agent":
+      "LoveArchive/0.1 (https://github.com/cotachi527-create/lovearchive)",
+    Accept: "application/json",
+  };
+  const query = `artist:"${artist}" AND releasegroup:"${title}"`;
+  const url = `https://musicbrainz.org/ws/2/release-group/?query=${encodeURIComponent(query)}&fmt=json&limit=6`;
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const out: ImageCandidate[] = [];
+  for (const rg of data?.["release-groups"] || []) {
+    if (rg?.id) {
+      out.push({
+        url: `https://coverartarchive.org/release-group/${rg.id}/front-250`,
+        note: rg.title || undefined,
+      });
+    }
+  }
+  return out;
+}
+
+async function wikipediaWorkImages(
+  artist: string,
+  title: string,
+): Promise<ImageCandidate[]> {
+  const q = encodeURIComponent(`${artist} ${title}`);
+  const searchUrl = `https://ja.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&srlimit=3&format=json&origin=*`;
+  const searchRes = await fetch(searchUrl, { signal: AbortSignal.timeout(8000) });
+  if (!searchRes.ok) return [];
+  const searchData = await searchRes.json();
+  const pageTitles = (searchData?.query?.search || [])
+    .map((s: { title?: string }) => s.title)
+    .filter(Boolean) as string[];
+  if (pageTitles.length === 0) return [];
+
+  const url = `https://ja.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(pageTitles.join("|"))}&prop=pageimages&pithumbsize=600&format=json&origin=*`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const out: ImageCandidate[] = [];
+  for (const page of Object.values(data?.query?.pages || {}) as Array<{
+    title?: string;
+    thumbnail?: { source?: string };
+  }>) {
+    if (page?.thumbnail?.source) {
+      out.push({
+        url: page.thumbnail.source,
+        note: page.title ? `Wikipedia「${page.title}」` : "Wikipedia",
+      });
+    }
+  }
+  return out;
 }
 
 async function viaGemini(artist: string, genre: Genre): Promise<SuggestItem[]> {
