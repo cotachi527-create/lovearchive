@@ -132,7 +132,7 @@ export function withSyncedImages(
   const imageUrls: string[] = [];
   let migratedOfficial: string | null = officialFromField;
   for (const u of rawUrls) {
-    if (isDirectImageUrl(u) || u.startsWith("data:")) {
+    if (isDirectImageUrl(u) || u.startsWith("data:") || u.startsWith("idb:")) {
       if (imageUrls.length < MAX_ITEM_IMAGES) imageUrls.push(u);
     } else if (!migratedOfficial && /^https?:\/\//i.test(u)) {
       migratedOfficial = u;

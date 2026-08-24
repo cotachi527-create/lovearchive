@@ -23,6 +23,13 @@ import {
   saveImagesByArtist,
 } from "@/lib/localImageFolder";
 import {
+  deleteMedia,
+  isLocalImage,
+  isMediaRef,
+  loadMedia,
+  saveMedia,
+} from "@/lib/mediaStore";
+import {
   CollectionItem,
   FeedItem,
   GENRE_KEYS,
@@ -72,6 +79,13 @@ export default function LoveArchiveApp() {
     name: null,
   });
   const [localSaveNote, setLocalSaveNote] = useState<string | null>(null);
+  /** idb: 参照 → data URL の解決済みマップ */
+  const [mediaSrc, setMediaSrc] = useState<Record<string, string>>({});
+
+  const srcFor = (url: string | null | undefined): string | null => {
+    if (!url) return null;
+    return isMediaRef(url) ? mediaSrc[url] || null : url;
+  };
 
   // forms
   const [artist, setArtist] = useState("");
@@ -84,6 +98,11 @@ export default function LoveArchiveApp() {
   const [itemMemo, setItemMemo] = useState("");
   const [itemTags, setItemTags] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<
+    { title: string; note?: string }[]
+  >([]);
+  const [loadingSuggest, setLoadingSuggest] = useState(false);
+  const [suggestNote, setSuggestNote] = useState<string | null>(null);
   const [memoDraft, setMemoDraft] = useState("");
   const [tagDraft, setTagDraft] = useState("");
   const [favDraft, setFavDraft] = useState<Record<Genre, string>>({
@@ -95,9 +114,38 @@ export default function LoveArchiveApp() {
     music: "",
   });
 
+  const suggestWorks = async () => {
+    const a = artist.trim();
+    if (!a || loadingSuggest) return;
+    setLoadingSuggest(true);
+    setSuggestNote(null);
+    setSuggestions([]);
+    try {
+      const res = await fetch("/api/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artist: a, genre: itemGenre }),
+      });
+      const data = await res.json();
+      const items = (data.items || []) as { title: string; note?: string }[];
+      setSuggestions(items);
+      if (items.length === 0) {
+        setSuggestNote(
+          "作品が見つかりませんでした。作品名を直接入力してください。",
+        );
+      }
+    } catch {
+      setSuggestNote("検索に失敗しました。もう一度お試しください。");
+    } finally {
+      setLoadingSuggest(false);
+    }
+  };
+
   const resetItemForm = () => {
     setEditingId(null);
     setArtist("");
+    setSuggestions([]);
+    setSuggestNote(null);
     setTitle("");
     setItemGenre("art");
     formImagesRef.current = [];
@@ -207,7 +255,12 @@ export default function LoveArchiveApp() {
     }
     try {
       const dataUrl = await fileToDataUrl(file);
-      return addFormImage(dataUrl);
+      // 画像本体は IndexedDB へ。フォームには参照だけ持たせる
+      const ref = await saveMedia(dataUrl);
+      setMediaSrc((prev) => ({ ...prev, [ref]: dataUrl }));
+      const ok = addFormImage(ref);
+      if (!ok) void deleteMedia(ref);
+      return ok;
     } catch {
       setError(
         "画像の読み込みに失敗しました。別の画像を試すか、サイズを小さくしてください。",
@@ -232,12 +285,64 @@ export default function LoveArchiveApp() {
     if (imageFiles.length === 0) return;
 
     e.preventDefault();
+    // 入れ子の onPaste / window リスナーへの多重伝播を防ぐ
+    e.stopPropagation();
     void (async () => {
       for (const file of imageFiles) {
         const ok = await handleFormImageFile(file);
         if (!ok && formImagesRef.current.length >= MAX_ITEM_IMAGES) break;
       }
     })();
+  };
+
+  /** 旧データ移行: localStorage 内の data URL 画像を IndexedDB へ移す */
+  const migrationStarted = useRef(false);
+  const migrateLocalImages = async () => {
+    if (migrationStarted.current) return;
+    migrationStarted.current = true;
+    const items = getCollection();
+    let changed = false;
+    const next: CollectionItem[] = [];
+    for (const item of items) {
+      let itemChanged = false;
+      const urls: string[] = [];
+      for (const u of item.imageUrls || []) {
+        if (u.startsWith("data:")) {
+          try {
+            urls.push(await saveMedia(u));
+            itemChanged = true;
+          } catch {
+            urls.push(u);
+          }
+        } else {
+          urls.push(u);
+        }
+      }
+      if (itemChanged) {
+        changed = true;
+        // 旧 imageUrl フィールドに残る data URL を持ち込まないよう明示的に上書き
+        next.push(
+          withSyncedImages({ ...item, imageUrls: urls, imageUrl: urls[0] || null }),
+        );
+      } else {
+        next.push(item);
+      }
+    }
+    if (changed) {
+      setCollection(next);
+      saveCollection(next);
+    }
+
+    // enrichCache に紛れ込んだ data URL も除去（localStorage 節約）
+    const cache = getEnrichCache();
+    let cacheChanged = false;
+    for (const k of Object.keys(cache)) {
+      if (cache[k].imageUrl?.startsWith("data:")) {
+        cache[k].imageUrl = null;
+        cacheChanged = true;
+      }
+    }
+    if (cacheChanged) saveEnrichCache(cache);
   };
 
   useEffect(() => {
@@ -262,7 +367,32 @@ export default function LoveArchiveApp() {
     }
     setReady(true);
     void getLocalFolderStatus().then(setLocalFolder);
+    void migrateLocalImages();
   }, []);
+
+  // idb: 参照の画像を表示用 data URL に解決
+  useEffect(() => {
+    const refs = new Set<string>();
+    for (const u of formImages) if (isMediaRef(u)) refs.add(u);
+    for (const item of collection) {
+      const u = item.imageUrls?.[0];
+      if (isMediaRef(u)) refs.add(u);
+    }
+    const enrichmentUrl = enrichment?.imageUrl;
+    if (isMediaRef(enrichmentUrl)) refs.add(enrichmentUrl);
+    const missing = Array.from(refs).filter((r) => !mediaSrc[r]);
+    if (missing.length === 0) return;
+    void (async () => {
+      const resolved: Record<string, string> = {};
+      for (const r of missing) {
+        const v = await loadMedia(r);
+        if (v) resolved[r] = v;
+      }
+      if (Object.keys(resolved).length > 0) {
+        setMediaSrc((prev) => ({ ...prev, ...resolved }));
+      }
+    })();
+  }, [collection, formImages, enrichment, mediaSrc]);
 
   const persistImagesToPc = async (item: {
     artist: string;
@@ -368,7 +498,7 @@ export default function LoveArchiveApp() {
 
     const primaryRegistered = item.imageUrls?.[0] || item.imageUrl || null;
     const isDataImage = Boolean(
-      primaryRegistered?.startsWith("data:image/") && !forceAuto && !alternate,
+      isLocalImage(primaryRegistered) && !forceAuto && !alternate,
     );
 
     const res = await fetch("/api/enrich", {
@@ -417,7 +547,8 @@ export default function LoveArchiveApp() {
       setUsedImageUrls(url ? [url] : []);
       setAltImageNote(null);
       cache[key] = {
-        imageUrl: data.imageUrl,
+        // data URL / idb 参照は localStorage に入れない（容量対策）
+        imageUrl: isLocalImage(data.imageUrl) ? null : data.imageUrl,
         imageCredit: data.imageCredit,
         imageSource: data.imageSource ?? null,
         bio: data.bio,
@@ -475,7 +606,7 @@ export default function LoveArchiveApp() {
       );
 
       if (nextRegistered) {
-        if (nextRegistered.startsWith("data:image/")) {
+        if (isLocalImage(nextRegistered)) {
           setEnrichment((prev) =>
             prev
               ? {
@@ -781,6 +912,11 @@ export default function LoveArchiveApp() {
       saveEnrichCache(cache);
     }
 
+    // 編集で外された idb 画像は IndexedDB からも削除
+    for (const u of prev.imageUrls || []) {
+      if (isMediaRef(u) && !next.imageUrls.includes(u)) void deleteMedia(u);
+    }
+
     persistCollection(
       collection.map((c) => (c.id === editingId ? next : c)),
     );
@@ -808,6 +944,10 @@ export default function LoveArchiveApp() {
 
   const removeItem = (id: string) => {
     if (editingId === id) resetItemForm();
+    const removed = collection.find((c) => c.id === id);
+    for (const u of removed?.imageUrls || []) {
+      if (isMediaRef(u)) void deleteMedia(u);
+    }
     persistCollection(collection.filter((c) => c.id !== id));
     if (current?.id === id) {
       setCurrent(null);
@@ -870,6 +1010,52 @@ export default function LoveArchiveApp() {
   const updatePrefs = (next: Preferences) => {
     setPrefs(next);
     savePreferences(next);
+  };
+
+  /** コレクション一式を JSON ファイルとしてダウンロード（idb 画像は data URL に展開） */
+  const [exporting, setExporting] = useState(false);
+  const exportCollection = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const items = getCollection();
+      const resolved: CollectionItem[] = [];
+      for (const item of items) {
+        const urls: string[] = [];
+        for (const u of item.imageUrls || []) {
+          if (isMediaRef(u)) {
+            const v = await loadMedia(u);
+            if (v) urls.push(v);
+          } else {
+            urls.push(u);
+          }
+        }
+        resolved.push({ ...item, imageUrls: urls, imageUrl: urls[0] || null });
+      }
+      const payload = {
+        app: "lovearchive",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        collection: resolved,
+        preferences: getPreferences(),
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `lovearchive-backup-${todayKey()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setLocalSaveNote(
+        `コレクション ${resolved.length} 件をダウンロードしました。`,
+      );
+    } catch {
+      setError("エクスポートに失敗しました。もう一度お試しください。");
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (!ready || !prefs) {
@@ -1026,11 +1212,11 @@ export default function LoveArchiveApp() {
 
             {current && (
               <article className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-xl shadow-black/40">
-                {enrichment?.imageUrl ? (
+                {srcFor(enrichment?.imageUrl) ? (
                   <div className="relative aspect-square w-full">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={enrichment.imageUrl}
+                      src={srcFor(enrichment?.imageUrl)!}
                       alt={`${current.artist} ${current.title}`}
                       className="h-full w-full object-contain bg-black/20"
                       onError={handleImageError}
@@ -1251,12 +1437,57 @@ export default function LoveArchiveApp() {
                     ))}
                   </div>
                 </div>
-                <input
-                  value={artist}
-                  onChange={(e) => setArtist(e.target.value)}
-                  placeholder="作家名"
-                  className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-rose-400/50"
-                />
+                <div className="flex gap-2">
+                  <input
+                    value={artist}
+                    onChange={(e) => setArtist(e.target.value)}
+                    placeholder="作家名"
+                    className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-rose-400/50"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void suggestWorks();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void suggestWorks()}
+                    disabled={!artist.trim() || loadingSuggest}
+                    className="shrink-0 rounded-xl bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-40"
+                  >
+                    {loadingSuggest ? "検索中…" : "作品を探す"}
+                  </button>
+                </div>
+                {suggestNote && (
+                  <p className="text-[11px] text-[var(--muted)]">{suggestNote}</p>
+                )}
+                {suggestions.length > 0 && (
+                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-2.5">
+                    <p className="mb-1.5 text-[10px] text-violet-200/80">
+                      タップで作品名に入力されます
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {suggestions.map((s) => (
+                        <button
+                          key={s.title}
+                          type="button"
+                          onClick={() => setTitle(s.title)}
+                          className={`rounded-full px-2.5 py-1 text-[11px] transition ${
+                            title === s.title
+                              ? "bg-rose-500 text-white"
+                              : "bg-white/10 text-white hover:bg-white/20"
+                          }`}
+                        >
+                          {s.title}
+                          {s.note ? (
+                            <span className="ml-1 opacity-60">{s.note}</span>
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <input
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
@@ -1277,12 +1508,16 @@ export default function LoveArchiveApp() {
                     <div className="mb-2 grid grid-cols-5 gap-1.5">
                       {formImages.map((url, index) => (
                         <div key={`${index}-${url.slice(0, 24)}`} className="relative">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={url}
-                            alt=""
-                            className="h-14 w-full rounded-lg object-cover bg-black/30"
-                          />
+                          {srcFor(url) ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={srcFor(url)!}
+                              alt=""
+                              className="h-14 w-full rounded-lg object-cover bg-black/30"
+                            />
+                          ) : (
+                            <div className="h-14 w-full rounded-lg bg-black/30" />
+                          )}
                           <button
                             type="button"
                             onClick={() => removeFormImage(index)}
@@ -1431,10 +1666,10 @@ export default function LoveArchiveApp() {
                   }`}
                 >
                   <div className="flex items-start gap-3">
-                    {item.imageUrls?.[0] ? (
+                    {srcFor(item.imageUrls?.[0]) ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={item.imageUrls[0]}
+                        src={srcFor(item.imageUrls?.[0])!}
                         alt=""
                         className="h-14 w-14 shrink-0 rounded-lg object-cover bg-black/30"
                       />
@@ -1578,6 +1813,27 @@ export default function LoveArchiveApp() {
                   </p>
                 </div>
               )}
+            </div>
+
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <h2 className="mb-1 text-lg font-bold text-white">
+                バックアップ
+              </h2>
+              <p className="mb-3 text-xs leading-relaxed text-[var(--muted)]">
+                コレクション全体（画像・メモ・タグ・好み設定）を1つのファイルに
+                まとめてダウンロードします。ブラウザのデータを消しても、
+                このファイルがあれば復元できます。
+              </p>
+              <button
+                type="button"
+                onClick={() => void exportCollection()}
+                disabled={exporting || collection.length === 0}
+                className="rounded-full bg-rose-500 px-4 py-2 text-xs font-bold text-white hover:bg-rose-400 disabled:opacity-40"
+              >
+                {exporting
+                  ? "書き出し中…"
+                  : `コレクションをダウンロード（${collection.length} 件）`}
+              </button>
             </div>
 
             <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">

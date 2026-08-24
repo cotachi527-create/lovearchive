@@ -3,6 +3,8 @@
  * Chrome / Edge の HTTPS または localhost で利用可能
  */
 
+import { isMediaRef, loadMedia } from "./mediaStore";
+
 const DB_NAME = "lovearchive-fs";
 const STORE = "handles";
 const ROOT_KEY = "imageRoot";
@@ -162,6 +164,12 @@ function extFromMime(mime: string) {
 }
 
 async function urlToBlob(url: string): Promise<Blob | null> {
+  if (isMediaRef(url)) {
+    const dataUrl = await loadMedia(url);
+    if (!dataUrl) return null;
+    const res = await fetch(dataUrl);
+    return res.blob();
+  }
   if (url.startsWith("data:")) {
     const res = await fetch(url);
     return res.blob();

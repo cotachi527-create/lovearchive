@@ -30,7 +30,11 @@ function readJson<T>(key: string, fallback: T): T {
 
 function writeJson<T>(key: string, value: T) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(key, JSON.stringify(value));
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.error(`localStorage への保存に失敗しました (${key})`, e);
+  }
 }
 
 export function getCollection(): CollectionItem[] {
