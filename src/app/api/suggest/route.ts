@@ -3,7 +3,7 @@ import { Genre, GENRE_KEYS } from "@/lib/types";
 
 export const maxDuration = 30;
 
-type SuggestItem = { title: string; note?: string };
+type SuggestItem = { title: string; note?: string; imageUrl?: string };
 
 type SuggestBody = {
   artist: string;
@@ -50,15 +50,19 @@ export async function POST(req: NextRequest) {
 }
 
 function dedupe(items: SuggestItem[]): SuggestItem[] {
-  const seen = new Set<string>();
-  const out: SuggestItem[] = [];
+  const seen = new Map<string, SuggestItem>();
   for (const item of items) {
     const key = item.title.trim().toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push({ ...item, title: item.title.trim() });
+    if (!key) continue;
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, { ...item, title: item.title.trim() });
+    } else if (!existing.imageUrl && item.imageUrl) {
+      // 同名の候補は画像を持つ方を優先
+      existing.imageUrl = item.imageUrl;
+    }
   }
-  return out;
+  return Array.from(seen.values());
 }
 
 async function viaGemini(artist: string, genre: Genre): Promise<SuggestItem[]> {
@@ -109,7 +113,18 @@ async function viaBooks(artist: string): Promise<SuggestItem[]> {
       for (const v of data?.items || []) {
         const title = v?.volumeInfo?.title;
         const year = (v?.volumeInfo?.publishedDate || "").slice(0, 4);
-        if (title) items.push({ title, note: year || undefined });
+        const thumb =
+          v?.volumeInfo?.imageLinks?.thumbnail ||
+          v?.volumeInfo?.imageLinks?.smallThumbnail;
+        if (title) {
+          items.push({
+            title,
+            note: year || undefined,
+            imageUrl: thumb
+              ? String(thumb).replace("http://", "https://")
+              : undefined,
+          });
+        }
       }
     }
   } catch {
@@ -119,7 +134,7 @@ async function viaBooks(artist: string): Promise<SuggestItem[]> {
   // Open Library で補完
   if (items.length < 5) {
     try {
-      const url = `https://openlibrary.org/search.json?author=${encodeURIComponent(artist)}&limit=20&fields=title,first_publish_year`;
+      const url = `https://openlibrary.org/search.json?author=${encodeURIComponent(artist)}&limit=20&fields=title,first_publish_year,cover_i`;
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
       if (res.ok) {
         const data = await res.json();
@@ -128,6 +143,10 @@ async function viaBooks(artist: string): Promise<SuggestItem[]> {
             items.push({
               title: d.title,
               note: d.first_publish_year ? String(d.first_publish_year) : undefined,
+              imageUrl:
+                typeof d.cover_i === "number"
+                  ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg`
+                  : undefined,
             });
           }
         }
@@ -167,7 +186,14 @@ async function viaMusicBrainz(artist: string): Promise<SuggestItem[]> {
   for (const rg of rgData?.["release-groups"] || []) {
     if (rg?.title) {
       const year = (rg["first-release-date"] || "").slice(0, 4);
-      items.push({ title: rg.title, note: year || undefined });
+      items.push({
+        title: rg.title,
+        note: year || undefined,
+        // Cover Art Archive のジャケット（存在しない場合はクライアント側で非表示）
+        imageUrl: rg.id
+          ? `https://coverartarchive.org/release-group/${rg.id}/front-250`
+          : undefined,
+      });
     }
   }
   return dedupe(items);
@@ -177,7 +203,7 @@ async function viaAniList(artist: string): Promise<SuggestItem[]> {
   const query = `query ($search: String) {
   Staff(search: $search) {
     staffMedia(perPage: 12, sort: POPULARITY_DESC) {
-      nodes { title { native romaji } startDate { year } }
+      nodes { title { native romaji } startDate { year } coverImage { medium } }
     }
   }
 }`;
@@ -197,6 +223,7 @@ async function viaAniList(artist: string): Promise<SuggestItem[]> {
       items.push({
         title,
         note: n?.startDate?.year ? String(n.startDate.year) : undefined,
+        imageUrl: n?.coverImage?.medium || undefined,
       });
     }
   }
@@ -213,12 +240,13 @@ async function viaWikidata(artist: string): Promise<SuggestItem[]> {
   if (!qid) return [];
 
   // 2) 代表作(P800) と、作者・監督・制作者としての作品を取得
-  const sparql = `SELECT DISTINCT ?workLabel WHERE {
+  const sparql = `SELECT DISTINCT ?workLabel (SAMPLE(?img) AS ?image) WHERE {
   { wd:${qid} wdt:P800 ?work }
   UNION
   { ?work wdt:P50|wdt:P57|wdt:P170|wdt:P86|wdt:P110|wdt:P178 wd:${qid} }
+  OPTIONAL { ?work wdt:P18 ?img }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "ja,en". }
-} LIMIT 20`;
+} GROUP BY ?workLabel LIMIT 20`;
   const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(sparql)}&format=json`;
   const res = await fetch(url, {
     headers: {
@@ -233,9 +261,15 @@ async function viaWikidata(artist: string): Promise<SuggestItem[]> {
   const items: SuggestItem[] = [];
   for (const row of data?.results?.bindings || []) {
     const label = row?.workLabel?.value as string | undefined;
+    const img = row?.image?.value as string | undefined;
     // ja/en ラベルがない項目は "Q12345" のまま返るので除外
     if (label && !/^Q\d+$/.test(label)) {
-      items.push({ title: label });
+      items.push({
+        title: label,
+        imageUrl: img
+          ? `${img.replace("http://", "https://")}?width=240`
+          : undefined,
+      });
     }
   }
   return dedupe(items);

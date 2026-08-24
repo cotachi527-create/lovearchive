@@ -94,6 +94,10 @@ export function isDirectImageUrl(url: string) {
   if (/microlink\.io|thum\.io|images\.|img\.|cdn\.|covers\.|media\./i.test(u)) {
     return true;
   }
+  // 拡張子なしでも画像を返すカバーAPI
+  if (/coverartarchive\.org|books\.google\./i.test(u)) {
+    return true;
+  }
   return false;
 }
 

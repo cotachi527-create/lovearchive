@@ -99,10 +99,11 @@ export default function LoveArchiveApp() {
   const [itemTags, setItemTags] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<
-    { title: string; note?: string }[]
+    { title: string; note?: string; imageUrl?: string }[]
   >([]);
   const [loadingSuggest, setLoadingSuggest] = useState(false);
   const [suggestNote, setSuggestNote] = useState<string | null>(null);
+  const [selectedWorks, setSelectedWorks] = useState<string[]>([]);
   const [memoDraft, setMemoDraft] = useState("");
   const [tagDraft, setTagDraft] = useState("");
   const [favDraft, setFavDraft] = useState<Record<Genre, string>>({
@@ -120,6 +121,7 @@ export default function LoveArchiveApp() {
     setLoadingSuggest(true);
     setSuggestNote(null);
     setSuggestions([]);
+    setSelectedWorks([]);
     try {
       const res = await fetch("/api/suggest", {
         method: "POST",
@@ -127,7 +129,11 @@ export default function LoveArchiveApp() {
         body: JSON.stringify({ artist: a, genre: itemGenre }),
       });
       const data = await res.json();
-      const items = (data.items || []) as { title: string; note?: string }[];
+      const items = (data.items || []) as {
+        title: string;
+        note?: string;
+        imageUrl?: string;
+      }[];
       setSuggestions(items);
       if (items.length === 0) {
         setSuggestNote(
@@ -146,6 +152,7 @@ export default function LoveArchiveApp() {
     setArtist("");
     setSuggestions([]);
     setSuggestNote(null);
+    setSelectedWorks([]);
     setTitle("");
     setItemGenre("art");
     formImagesRef.current = [];
@@ -813,6 +820,41 @@ export default function LoveArchiveApp() {
     }
   };
 
+  /** 選択した候補をまとめてコレクションに登録 */
+  const bulkAddSelected = () => {
+    const a = artist.trim();
+    if (!a || selectedWorks.length === 0) return;
+    const now = new Date().toISOString();
+    const newItems = suggestions
+      .filter((s) => selectedWorks.includes(s.title))
+      .filter(
+        (s) => !collection.some((c) => c.artist === a && c.title === s.title),
+      )
+      .map((s) =>
+        withSyncedImages({
+          id: uid(),
+          artist: a,
+          title: s.title,
+          genre: itemGenre,
+          imageUrls: s.imageUrl ? [s.imageUrl] : [],
+          officialUrl: null,
+          memo: "",
+          tags: [],
+          lastShownAt: null,
+          createdAt: now,
+        }),
+      );
+    if (newItems.length === 0) {
+      setSelectedWorks([]);
+      return;
+    }
+    persistCollection([...newItems, ...collection]);
+    for (const item of newItems) void persistImagesToPc(item);
+    setSelectedWorks([]);
+    setLocalSaveNote(`${newItems.length} 件をコレクションに登録しました。`);
+    setError(null);
+  };
+
   const addItem = () => {
     const a = artist.trim();
     const t = title.trim();
@@ -1465,26 +1507,90 @@ export default function LoveArchiveApp() {
                 {suggestions.length > 0 && (
                   <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-2.5">
                     <p className="mb-1.5 text-[10px] text-violet-200/80">
-                      タップで作品名に入力されます
+                      タップで選択して、まとめて登録できます（画像も一緒に登録されます）
                     </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {suggestions.map((s) => (
-                        <button
-                          key={s.title}
-                          type="button"
-                          onClick={() => setTitle(s.title)}
-                          className={`rounded-full px-2.5 py-1 text-[11px] transition ${
-                            title === s.title
-                              ? "bg-rose-500 text-white"
-                              : "bg-white/10 text-white hover:bg-white/20"
-                          }`}
-                        >
-                          {s.title}
-                          {s.note ? (
-                            <span className="ml-1 opacity-60">{s.note}</span>
-                          ) : null}
-                        </button>
-                      ))}
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {suggestions.map((s) => {
+                        const registered = collection.some(
+                          (c) =>
+                            c.artist === artist.trim() && c.title === s.title,
+                        );
+                        const selected = selectedWorks.includes(s.title);
+                        return (
+                          <button
+                            key={s.title}
+                            type="button"
+                            disabled={registered}
+                            onClick={() =>
+                              setSelectedWorks((prev) =>
+                                prev.includes(s.title)
+                                  ? prev.filter((t) => t !== s.title)
+                                  : [...prev, s.title],
+                              )
+                            }
+                            className={`relative overflow-hidden rounded-lg border text-left transition ${
+                              registered
+                                ? "border-white/5 opacity-40"
+                                : selected
+                                  ? "border-rose-400 bg-rose-500/20"
+                                  : "border-white/10 bg-black/20 hover:border-rose-400/40"
+                            }`}
+                          >
+                            {s.imageUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={s.imageUrl}
+                                alt=""
+                                loading="lazy"
+                                className="h-20 w-full bg-black/30 object-cover"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = "none";
+                                }}
+                              />
+                            ) : (
+                              <div className="flex h-20 w-full items-center justify-center bg-black/30 text-[9px] text-[var(--muted)]">
+                                画像なし
+                              </div>
+                            )}
+                            <span className="block px-1.5 py-1 text-[10px] leading-tight text-white">
+                              {s.title}
+                              {s.note ? (
+                                <span className="ml-1 opacity-60">{s.note}</span>
+                              ) : null}
+                              {registered ? (
+                                <span className="ml-1 text-emerald-300">
+                                  登録済み
+                                </span>
+                              ) : null}
+                            </span>
+                            {selected && (
+                              <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] text-white">
+                                ✓
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={bulkAddSelected}
+                        disabled={selectedWorks.length === 0}
+                        className="flex-1 rounded-full bg-rose-500 py-2 text-xs font-bold text-white hover:bg-rose-400 disabled:opacity-40"
+                      >
+                        選択した {selectedWorks.length} 件を登録
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSuggestions([]);
+                          setSelectedWorks([]);
+                        }}
+                        className="rounded-full border border-white/15 px-3 py-2 text-[11px] text-[var(--muted)] hover:text-white"
+                      >
+                        閉じる
+                      </button>
                     </div>
                   </div>
                 )}

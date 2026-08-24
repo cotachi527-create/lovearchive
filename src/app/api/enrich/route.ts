@@ -208,6 +208,15 @@ async function resolveDirectImageUrl(url: string): Promise<ImageResult> {
     };
   }
 
+  // 拡張子なしでも画像を返すカバーAPI
+  if (/coverartarchive\.org|books\.google\./i.test(url)) {
+    return {
+      imageUrl: url,
+      imageCredit: "登録した画像URL",
+      imageSource: "registered",
+    };
+  }
+
   // 画像URL欄にページURLが入った場合のフォールバック
   return resolveOfficialPageImage(url);
 }
