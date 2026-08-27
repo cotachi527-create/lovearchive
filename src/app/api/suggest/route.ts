@@ -3,13 +3,19 @@ import { Genre, GENRE_KEYS } from "@/lib/types";
 
 export const maxDuration = 30;
 
-type SuggestItem = { title: string; note?: string; imageUrl?: string };
+type SuggestItem = {
+  title: string;
+  note?: string;
+  imageUrl?: string;
+  /** 作品名だけで検索したときに見つかった作家名 */
+  artist?: string;
+};
 
 type ImageCandidate = { url: string; note?: string };
 
 type SuggestBody = {
-  artist: string;
-  /** 指定時は「この作品の画像候補」を返す */
+  /** artist・title は少なくとも一方が必要 */
+  artist?: string;
   title?: string;
   genre?: Genre;
 };
@@ -17,17 +23,20 @@ type SuggestBody = {
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as SuggestBody;
   const artist = (body.artist || "").trim();
+  const title = (body.title || "").trim();
   const genre: Genre = GENRE_KEYS.includes(body.genre as Genre)
     ? (body.genre as Genre)
     : "art";
 
-  if (!artist) {
-    return NextResponse.json({ error: "artist が必要です" }, { status: 400 });
+  if (!artist && !title) {
+    return NextResponse.json(
+      { error: "artist または title が必要です" },
+      { status: 400 },
+    );
   }
 
-  // 作品名あり → その作品の画像候補を返すモード
-  const title = (body.title || "").trim();
-  if (title) {
+  // 作家名・作品名の両方あり → その作品の画像候補を返すモード
+  if (artist && title) {
     let images: ImageCandidate[] = [];
     try {
       images = await findWorkImages(artist, title, genre);
@@ -37,6 +46,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ images: dedupeImages(images).slice(0, 12) });
   }
 
+  // 作品名のみ → 作家名を推定しながら作品候補を返すモード
+  if (!artist && title) {
+    const items = await findWorksByTitle(title, genre);
+    return NextResponse.json({ items: dedupe(items).slice(0, 12) });
+  }
+
+  // 作家名のみ → 代表作の候補を返すモード
   // 1) Gemini（キーがあれば最優先。ジャンル問わず質が高い）
   const fromGemini = await viaGemini(artist, genre);
   if (fromGemini.length > 0) {
@@ -68,11 +84,17 @@ export async function POST(req: NextRequest) {
 function dedupe(items: SuggestItem[]): SuggestItem[] {
   const seen = new Map<string, SuggestItem>();
   for (const item of items) {
-    const key = item.title.trim().toLowerCase();
-    if (!key) continue;
+    const titleKey = item.title.trim().toLowerCase();
+    if (!titleKey) continue;
+    // 作家名が異なれば同名でも別候補として残す（同名異作家の作品名検索向け）
+    const key = `${(item.artist || "").trim().toLowerCase()}::${titleKey}`;
     const existing = seen.get(key);
     if (!existing) {
-      seen.set(key, { ...item, title: item.title.trim() });
+      seen.set(key, {
+        ...item,
+        title: item.title.trim(),
+        artist: item.artist?.trim() || undefined,
+      });
     } else if (!existing.imageUrl && item.imageUrl) {
       // 同名の候補は画像を持つ方を優先
       existing.imageUrl = item.imageUrl;
@@ -90,6 +112,270 @@ function dedupeImages(images: ImageCandidate[]): ImageCandidate[] {
     out.push(img);
   }
   return out;
+}
+
+/** 作品名だけで検索: 作家名を推定しながら候補を集める */
+async function findWorksByTitle(
+  title: string,
+  genre: Genre,
+): Promise<SuggestItem[]> {
+  const fromGemini = await viaGeminiByTitle(title, genre);
+  if (fromGemini.length > 0) return fromGemini;
+
+  let items: SuggestItem[] = [];
+  try {
+    if (genre === "book") items = await viaBooksByTitle(title);
+    else if (genre === "music") items = await viaMusicBrainzByTitle(title);
+    else if (genre === "anime") items = await viaAniListByTitle(title);
+  } catch {
+    items = [];
+  }
+
+  if (items.length === 0) {
+    try {
+      items = await viaWikidataByTitle(title);
+    } catch {
+      items = [];
+    }
+  }
+  return items;
+}
+
+async function viaGeminiByTitle(
+  title: string,
+  genre: Genre,
+): Promise<SuggestItem[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return [];
+
+  try {
+    const prompt = `作品名「${title}」（ジャンル: ${genre}）に一致する実在の作品を、作家名（著者・監督・アーティストなど）とともに日本語でJSONだけ返してください。同名の作品が複数の作家に存在する場合は、それぞれ別の候補として含めてください。実在が確実なもののみ最大6件。
+
+{"items":[{"title":"作品名","artist":"作家名","note":"発表年など一言（不明なら省略）"}]}`;
+    const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2 },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const text =
+      data?.candidates?.[0]?.content?.parts
+        ?.map((p: { text?: string }) => p.text || "")
+        .join("") || "";
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return [];
+    const parsed = JSON.parse(jsonMatch[0]) as { items?: SuggestItem[] };
+    return dedupe(
+      (parsed.items || []).filter(
+        (i) =>
+          typeof i?.title === "string" &&
+          typeof i?.artist === "string" &&
+          i.artist,
+      ),
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function viaBooksByTitle(title: string): Promise<SuggestItem[]> {
+  const items: SuggestItem[] = [];
+
+  try {
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(`intitle:"${title}"`)}&maxResults=10&printType=books`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      for (const v of data?.items || []) {
+        const t = v?.volumeInfo?.title;
+        const authors = v?.volumeInfo?.authors;
+        const artistName = Array.isArray(authors)
+          ? authors.join("・")
+          : undefined;
+        const year = (v?.volumeInfo?.publishedDate || "").slice(0, 4);
+        const thumb =
+          v?.volumeInfo?.imageLinks?.thumbnail ||
+          v?.volumeInfo?.imageLinks?.smallThumbnail;
+        if (t && artistName) {
+          items.push({
+            title: t,
+            artist: artistName,
+            note: year || undefined,
+            imageUrl: thumb
+              ? String(thumb).replace("http://", "https://")
+              : undefined,
+          });
+        }
+      }
+    }
+  } catch {
+    // try next
+  }
+
+  if (items.length < 5) {
+    try {
+      const url = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&limit=10&fields=title,author_name,first_publish_year,cover_i`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const data = await res.json();
+        for (const d of data?.docs || []) {
+          const artistName = Array.isArray(d?.author_name)
+            ? d.author_name.join("・")
+            : undefined;
+          if (d?.title && artistName) {
+            items.push({
+              title: d.title,
+              artist: artistName,
+              note: d.first_publish_year
+                ? String(d.first_publish_year)
+                : undefined,
+              imageUrl:
+                typeof d.cover_i === "number"
+                  ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg`
+                  : undefined,
+            });
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return dedupe(items);
+}
+
+async function viaMusicBrainzByTitle(title: string): Promise<SuggestItem[]> {
+  const headers = {
+    "User-Agent":
+      "LoveArchive/0.1 (https://github.com/cotachi527-create/lovearchive)",
+    Accept: "application/json",
+  };
+  const url = `https://musicbrainz.org/ws/2/release-group/?query=${encodeURIComponent(`releasegroup:"${title}"`)}&fmt=json&limit=10`;
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const items: SuggestItem[] = [];
+  for (const rg of data?.["release-groups"] || []) {
+    const artistName = Array.isArray(rg?.["artist-credit"])
+      ? rg["artist-credit"]
+          .map((ac: { name?: string }) => ac.name)
+          .filter(Boolean)
+          .join("・")
+      : undefined;
+    if (rg?.title && artistName) {
+      const year = (rg["first-release-date"] || "").slice(0, 4);
+      items.push({
+        title: rg.title,
+        artist: artistName,
+        note: year || undefined,
+        imageUrl: rg.id
+          ? `https://coverartarchive.org/release-group/${rg.id}/front-250`
+          : undefined,
+      });
+    }
+  }
+  return dedupe(items);
+}
+
+async function viaAniListByTitle(title: string): Promise<SuggestItem[]> {
+  const query = `query ($search: String) {
+  Page(perPage: 8) {
+    media(search: $search) {
+      title { native romaji }
+      coverImage { medium }
+      startDate { year }
+      staff(sort: RELEVANCE, perPage: 1) {
+        edges { node { name { full native } } }
+      }
+    }
+  }
+}`;
+  const res = await fetch("https://graphql.anilist.co", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ query, variables: { search: title } }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const nodes = data?.data?.Page?.media || [];
+  const items: SuggestItem[] = [];
+  for (const n of nodes) {
+    const t = n?.title?.native || n?.title?.romaji;
+    const artistName =
+      n?.staff?.edges?.[0]?.node?.name?.full ||
+      n?.staff?.edges?.[0]?.node?.name?.native;
+    if (t && artistName) {
+      items.push({
+        title: t,
+        artist: artistName,
+        note: n?.startDate?.year ? String(n.startDate.year) : undefined,
+        imageUrl: n?.coverImage?.medium || undefined,
+      });
+    }
+  }
+  return dedupe(items);
+}
+
+async function viaWikidataByTitle(title: string): Promise<SuggestItem[]> {
+  // 1) 作品名でエンティティ候補を検索
+  const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(title)}&language=ja&uselang=ja&format=json&origin=*&limit=6`;
+  const searchRes = await fetch(searchUrl, { signal: AbortSignal.timeout(8000) });
+  if (!searchRes.ok) return [];
+  const searchData = await searchRes.json();
+  const qids = ((searchData?.search || []) as Array<{ id?: string }>)
+    .map((s) => s.id)
+    .filter((id): id is string => Boolean(id));
+  if (qids.length === 0) return [];
+
+  // 2) それぞれの候補の作家（著者・監督・制作者など）と画像をまとめて取得
+  const values = qids.map((q) => `wd:${q}`).join(" ");
+  const sparql = `SELECT ?item ?itemLabel ?creatorLabel (SAMPLE(?img) AS ?image) WHERE {
+  VALUES ?item { ${values} }
+  ?item wdt:P50|wdt:P57|wdt:P170|wdt:P86|wdt:P110|wdt:P178 ?creator .
+  OPTIONAL { ?item wdt:P18 ?img }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "ja,en". }
+} GROUP BY ?item ?itemLabel ?creatorLabel LIMIT 12`;
+  const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(sparql)}&format=json`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "LoveArchive/0.1 (https://github.com/cotachi527-create/lovearchive)",
+      Accept: "application/json",
+    },
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const items: SuggestItem[] = [];
+  for (const row of data?.results?.bindings || []) {
+    const itemLabel = row?.itemLabel?.value as string | undefined;
+    const creatorLabel = row?.creatorLabel?.value as string | undefined;
+    const img = row?.image?.value as string | undefined;
+    if (
+      itemLabel &&
+      creatorLabel &&
+      !/^Q\d+$/.test(itemLabel) &&
+      !/^Q\d+$/.test(creatorLabel)
+    ) {
+      items.push({
+        title: itemLabel,
+        artist: creatorLabel,
+        imageUrl: img
+          ? `${img.replace("http://", "https://")}?width=240`
+          : undefined,
+      });
+    }
+  }
+  return dedupe(items);
 }
 
 /** 作家名＋作品名から画像候補を集める */

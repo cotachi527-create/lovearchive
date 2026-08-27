@@ -57,6 +57,11 @@ function displayTitle(item: { artist: string; title: string }) {
   return item.title.trim() || item.artist;
 }
 
+/** 候補の識別キー（作家名＋作品名。同名異作家の候補を区別するため） */
+function workKey(s: { artist?: string; title: string }) {
+  return `${(s.artist || "").trim().toLowerCase()}::${s.title.trim().toLowerCase()}`;
+}
+
 function uid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -104,7 +109,7 @@ export default function LoveArchiveApp() {
   const [itemTags, setItemTags] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<
-    { title: string; note?: string; imageUrl?: string }[]
+    { title: string; note?: string; imageUrl?: string; artist?: string }[]
   >([]);
   const [loadingSuggest, setLoadingSuggest] = useState(false);
   const [suggestNote, setSuggestNote] = useState<string | null>(null);
@@ -112,6 +117,17 @@ export default function LoveArchiveApp() {
   const [imageResults, setImageResults] = useState<
     { url: string; note?: string }[]
   >([]);
+  /** 候補カードで読み込みに失敗した画像URL（プレースホルダーに切り替える） */
+  const [brokenSuggestImages, setBrokenSuggestImages] = useState<Set<string>>(
+    new Set(),
+  );
+  /** 候補カードごとに、すでに表示した画像URL（「他の画像」で重複を避ける） */
+  const [shownCardImages, setShownCardImages] = useState<
+    Record<string, string[]>
+  >({});
+  const [loadingCardImage, setLoadingCardImage] = useState<string | null>(
+    null,
+  );
   const [memoDraft, setMemoDraft] = useState("");
   const [tagDraft, setTagDraft] = useState("");
   const [favDraft, setFavDraft] = useState<Record<Genre, string>>({
@@ -126,7 +142,7 @@ export default function LoveArchiveApp() {
   const suggestWorks = async () => {
     const a = artist.trim();
     const t = title.trim();
-    if (!a || loadingSuggest) return;
+    if ((!a && !t) || loadingSuggest) return;
     setLoadingSuggest(true);
     setSuggestNote(null);
     setSuggestions([]);
@@ -137,14 +153,14 @@ export default function LoveArchiveApp() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          artist: a,
+          artist: a || undefined,
           title: t || undefined,
           genre: itemGenre,
         }),
       });
       const data = await res.json();
-      if (t) {
-        // 作品名あり → 画像候補モード
+      if (a && t) {
+        // 作家名＋作品名 → 画像候補モード
         const images = (data.images || []) as { url: string; note?: string }[];
         setImageResults(images);
         if (images.length === 0) {
@@ -154,15 +170,19 @@ export default function LoveArchiveApp() {
         }
         return;
       }
+      // 作家名のみ・作品名のみ → どちらも作品候補モード
       const items = (data.items || []) as {
         title: string;
         note?: string;
         imageUrl?: string;
+        artist?: string;
       }[];
       setSuggestions(items);
       if (items.length === 0) {
         setSuggestNote(
-          "作品が見つかりませんでした。作品名を直接入力してください。",
+          a
+            ? "作品が見つかりませんでした。作品名を直接入力してください。"
+            : "作品が見つかりませんでした。作家名も入力してみてください。",
         );
       }
     } catch {
@@ -850,20 +870,69 @@ export default function LoveArchiveApp() {
     }
   };
 
+  /** 候補カード1件分だけ、別の画像候補を探して差し替える */
+  const findAnotherCardImage = async (s: {
+    title: string;
+    artist?: string;
+    imageUrl?: string;
+  }) => {
+    const key = workKey(s);
+    const artistName = (s.artist || artist.trim()).trim();
+    if (!artistName || loadingCardImage) return;
+    setLoadingCardImage(key);
+    try {
+      const shown =
+        shownCardImages[key] || (s.imageUrl ? [s.imageUrl] : []);
+      const res = await fetch("/api/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          artist: artistName,
+          title: s.title,
+          genre: itemGenre,
+        }),
+      });
+      const data = await res.json();
+      const images = (data.images || []) as { url: string }[];
+      const next = images.find((im) => !shown.includes(im.url));
+      if (!next) {
+        setSuggestNote("他の画像は見つかりませんでした。");
+        return;
+      }
+      setSuggestions((prev) =>
+        prev.map((item) =>
+          workKey(item) === key ? { ...item, imageUrl: next.url } : item,
+        ),
+      );
+      setShownCardImages((prev) => ({ ...prev, [key]: [...shown, next.url] }));
+    } catch {
+      setSuggestNote("画像の取得に失敗しました。もう一度お試しください。");
+    } finally {
+      setLoadingCardImage(null);
+    }
+  };
+
   /** 選択した候補をまとめてコレクションに登録 */
   const bulkAddSelected = () => {
+    if (selectedWorks.length === 0) return;
     const a = artist.trim();
-    if (!a || selectedWorks.length === 0) return;
     const now = new Date().toISOString();
     const newItems = suggestions
-      .filter((s) => selectedWorks.includes(s.title))
-      .filter(
-        (s) => !collection.some((c) => c.artist === a && c.title === s.title),
-      )
-      .map((s) =>
-        withSyncedImages({
+      .filter((s) => selectedWorks.includes(workKey(s)))
+      .filter((s) => {
+        const artistName = (s.artist || a).trim();
+        return (
+          artistName &&
+          !collection.some(
+            (c) => c.artist === artistName && c.title === s.title,
+          )
+        );
+      })
+      .map((s) => {
+        const artistName = (s.artist || a).trim();
+        return withSyncedImages({
           id: uid(),
-          artist: a,
+          artist: artistName,
           title: s.title,
           genre: itemGenre,
           imageUrls: s.imageUrl ? [s.imageUrl] : [],
@@ -872,8 +941,8 @@ export default function LoveArchiveApp() {
           tags: [],
           lastShownAt: null,
           createdAt: now,
-        }),
-      );
+        });
+      });
     if (newItems.length === 0) {
       setSelectedWorks([]);
       return;
@@ -1529,18 +1598,18 @@ export default function LoveArchiveApp() {
                   <button
                     type="button"
                     onClick={() => void suggestWorks()}
-                    disabled={!artist.trim() || loadingSuggest}
+                    disabled={(!artist.trim() && !title.trim()) || loadingSuggest}
                     className="shrink-0 rounded-xl bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-40"
                   >
                     {loadingSuggest
                       ? "検索中…"
-                      : title.trim()
+                      : artist.trim() && title.trim()
                         ? "画像を探す"
                         : "作品を探す"}
                   </button>
                 </div>
                 <p className="text-[10px] text-[var(--muted)]">
-                  作家名だけ → 作品の候補 / 作家名＋作品名 → その作品の画像候補
+                  作家名だけ／作品名だけ → 作品の候補 / 両方入力 → その作品の画像候補
                 </p>
                 {suggestNote && (
                   <p className="text-[11px] text-[var(--muted)]">{suggestNote}</p>
@@ -1552,46 +1621,84 @@ export default function LoveArchiveApp() {
                     </p>
                     <div className="grid grid-cols-3 gap-1.5">
                       {suggestions.map((s) => {
+                        const key = workKey(s);
+                        const artistName = (s.artist || artist.trim()).trim();
                         const registered = collection.some(
                           (c) =>
-                            c.artist === artist.trim() && c.title === s.title,
+                            c.artist === artistName && c.title === s.title,
                         );
-                        const selected = selectedWorks.includes(s.title);
+                        const selected = selectedWorks.includes(key);
+                        const hasImage =
+                          s.imageUrl && !brokenSuggestImages.has(s.imageUrl);
                         return (
-                          <button
-                            key={s.title}
-                            type="button"
-                            disabled={registered}
-                            onClick={() =>
+                          <div
+                            key={key}
+                            role="button"
+                            tabIndex={registered ? -1 : 0}
+                            aria-disabled={registered}
+                            onClick={() => {
+                              if (registered) return;
                               setSelectedWorks((prev) =>
-                                prev.includes(s.title)
-                                  ? prev.filter((t) => t !== s.title)
-                                  : [...prev, s.title],
-                              )
-                            }
+                                prev.includes(key)
+                                  ? prev.filter((t) => t !== key)
+                                  : [...prev, key],
+                              );
+                            }}
+                            onKeyDown={(e) => {
+                              if (registered) return;
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedWorks((prev) =>
+                                  prev.includes(key)
+                                    ? prev.filter((t) => t !== key)
+                                    : [...prev, key],
+                                );
+                              }
+                            }}
                             className={`relative overflow-hidden rounded-lg border text-left transition ${
                               registered
                                 ? "border-white/5 opacity-40"
                                 : selected
-                                  ? "border-rose-400 bg-rose-500/20"
-                                  : "border-white/10 bg-black/20 hover:border-rose-400/40"
+                                  ? "cursor-pointer border-rose-400 bg-rose-500/20"
+                                  : "cursor-pointer border-white/10 bg-black/20 hover:border-rose-400/40"
                             }`}
                           >
-                            {s.imageUrl ? (
+                            {hasImage ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={s.imageUrl}
                                 alt=""
                                 loading="lazy"
                                 className="h-20 w-full bg-black/30 object-cover"
-                                onError={(e) => {
-                                  e.currentTarget.style.display = "none";
+                                onError={() => {
+                                  setBrokenSuggestImages((prev) => {
+                                    const next = new Set(prev);
+                                    next.add(s.imageUrl!);
+                                    return next;
+                                  });
                                 }}
                               />
                             ) : (
                               <div className="flex h-20 w-full items-center justify-center bg-black/30 text-[9px] text-[var(--muted)]">
                                 画像なし
                               </div>
+                            )}
+                            {!registered && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void findAnotherCardImage(s);
+                                }}
+                                disabled={loadingCardImage === key}
+                                className="absolute bottom-1 left-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[8px] text-white hover:bg-black/90 disabled:opacity-50"
+                              >
+                                {loadingCardImage === key
+                                  ? "検索中…"
+                                  : hasImage
+                                    ? "他の画像"
+                                    : "画像を探す"}
+                              </button>
                             )}
                             <span className="block px-1.5 py-1 text-[10px] leading-tight text-white">
                               {s.title}
@@ -1603,13 +1710,18 @@ export default function LoveArchiveApp() {
                                   登録済み
                                 </span>
                               ) : null}
+                              {s.artist && (
+                                <span className="block text-[9px] text-violet-200/80">
+                                  {s.artist}
+                                </span>
+                              )}
                             </span>
                             {selected && (
                               <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] text-white">
                                 ✓
                               </span>
                             )}
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
