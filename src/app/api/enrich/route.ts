@@ -158,6 +158,12 @@ ${title ? `作品名: ${title}\n` : ""}
     });
 
     if (!res.ok) {
+      // 無言で定型文に落ちると原因が追えないので、失敗理由は必ず残す
+      console.error(
+        "[enrich] gemini text failed",
+        res.status,
+        (await res.text()).slice(0, 300),
+      );
       return {
         bio: `${subject}について。`,
         latest: "最新情報の取得に失敗しました。リンクから確認してください。",
