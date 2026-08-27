@@ -5,7 +5,7 @@ export const maxDuration = 60;
 
 /** 実行時間の上限に届く前に、取れたところまでで必ず返すための時間予算 */
 const IMAGE_BUDGET_MS = 24_000;
-const TEXT_TIMEOUT_MS = 15_000;
+const TEXT_TIMEOUT_MS = 30_000;
 
 type ImageResult = {
   imageUrl: string | null;
