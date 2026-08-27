@@ -1,7 +1,11 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { Genre, GENRE_KEYS } from "@/lib/types";
 
-export const maxDuration = 30;
+export const maxDuration = 60;
+
+/** 実行時間の上限に届く前に、取れたところまでで必ず返すための時間予算 */
+const IMAGE_BUDGET_MS = 24_000;
+const TEXT_TIMEOUT_MS = 15_000;
 
 type ImageResult = {
   imageUrl: string | null;
@@ -150,6 +154,7 @@ ${title ? `作品名: ${title}\n` : ""}
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.4 },
       }),
+      signal: AbortSignal.timeout(TEXT_TIMEOUT_MS),
     });
 
     if (!res.ok) {
@@ -607,8 +612,11 @@ async function resolveImage(
     run: () => fetchWikipediaImage(artist, ""),
   });
 
+  const deadline = Date.now() + IMAGE_BUDGET_MS;
   for (const attempt of attempts) {
     if (excludeSources.includes(attempt.source)) continue;
+    // 予算切れなら残りは諦めて、画像なしで返す（全体のタイムアウトを防ぐ）
+    if (Date.now() > deadline) break;
     try {
       const result = await attempt.run();
       if (
