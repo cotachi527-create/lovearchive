@@ -101,6 +101,26 @@ export async function POST(req: NextRequest) {
   });
 }
 
+/** Gemini のエラー本文から、原因が分かる最小限だけ取り出す */
+async function describeGeminiError(res: Response) {
+  try {
+    const body = (await res.json()) as {
+      error?: {
+        message?: string;
+        status?: string;
+        details?: { quotaId?: string; violations?: { quotaId?: string }[] }[];
+      };
+    };
+    const quotaId =
+      body.error?.details
+        ?.flatMap((d) => [d.quotaId, ...(d.violations || []).map((v) => v.quotaId)])
+        .find(Boolean) || "-";
+    return `${body.error?.status || "-"} / quota=${quotaId} / ${(body.error?.message || "").slice(0, 120)}`;
+  } catch {
+    return "(本文を解析できませんでした)";
+  }
+}
+
 async function resolveText(
   artist: string,
   title: string,
@@ -162,7 +182,7 @@ ${title ? `作品名: ${title}\n` : ""}
       console.error(
         "[enrich] gemini text failed",
         res.status,
-        (await res.text()).slice(0, 300),
+        await describeGeminiError(res),
       );
       return {
         bio: `${subject}について。`,
