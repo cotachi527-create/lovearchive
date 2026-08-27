@@ -810,7 +810,11 @@ export default function LoveArchiveApp() {
 
       const picked = pickPiece(collection, mode === "extra" ? exclude : []);
       if (!picked) {
-        setError("出せる作品がありません。コレクションを増やしてください。");
+        setError(
+          mode === "extra"
+            ? "今日出せる作品は出し切りました。また明日、新しい一枚をお楽しみに。"
+            : "出せる作品がありません。コレクションを増やしてください。",
+        );
         return;
       }
 
