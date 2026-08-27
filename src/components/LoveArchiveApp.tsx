@@ -52,6 +52,11 @@ const GENRE_STYLE: Record<Genre, string> = {
 
 type Panel = "home" | "collection" | "settings";
 
+/** 作品名は任意。未入力なら作家名を主見出しにする */
+function displayTitle(item: { artist: string; title: string }) {
+  return item.title.trim() || item.artist;
+}
+
 function uid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -779,7 +784,7 @@ export default function LoveArchiveApp() {
   const drawPiece = async (mode: "main" | "extra") => {
     setError(null);
     if (collection.length === 0) {
-      setError("先にコレクションへ作家名と作品名を登録してください。");
+      setError("先にコレクションへ作家名を登録してください。");
       setPanel("collection");
       return;
     }
@@ -879,8 +884,8 @@ export default function LoveArchiveApp() {
   const addItem = () => {
     const a = artist.trim();
     const t = title.trim();
-    if (!a || !t) {
-      setError("作家名と作品名を入力してください。");
+    if (!a) {
+      setError("作家名を入力してください。");
       return;
     }
     const images = [...formImages];
@@ -931,8 +936,8 @@ export default function LoveArchiveApp() {
     if (!editingId) return;
     const a = artist.trim();
     const t = title.trim();
-    if (!a || !t) {
-      setError("作家名と作品名を入力してください。");
+    if (!a) {
+      setError("作家名を入力してください。");
       return;
     }
 
@@ -1302,11 +1307,13 @@ export default function LoveArchiveApp() {
                   <div className="flex aspect-square w-full items-center justify-center bg-gradient-to-br from-rose-950/60 to-violet-950/60 px-6 text-center">
                     <div>
                       <p className="text-lg font-black text-white">
-                        {current.title}
+                        {displayTitle(current)}
                       </p>
-                      <p className="mt-1 text-sm text-rose-200">
-                        {current.artist}
-                      </p>
+                      {current.title.trim() && (
+                        <p className="mt-1 text-sm text-rose-200">
+                          {current.artist}
+                        </p>
+                      )}
                       <p className="mt-3 text-[11px] text-[var(--muted)]">
                         {loadingPiece
                           ? "画像を取得中…"
@@ -1334,9 +1341,11 @@ export default function LoveArchiveApp() {
                       </span>
                     )}
                     <h2 className="text-xl font-bold text-white">
-                      {current.title}
+                      {displayTitle(current)}
                     </h2>
-                    <p className="text-sm text-rose-300">{current.artist}</p>
+                    {current.title.trim() && (
+                      <p className="text-sm text-rose-300">{current.artist}</p>
+                    )}
                     {enrichment?.imageCredit && (
                       <p className="mt-1 text-[10px] text-[var(--muted)]">
                         {enrichment.imageCredit}
@@ -1478,7 +1487,7 @@ export default function LoveArchiveApp() {
               <p className="mb-4 text-xs text-[var(--muted)]">
                 {editingId
                   ? "内容を直して「変更を保存」を押してください。"
-                  : "ジャンル・作家名・作品名を入力。画像・略歴・最新はAIが補います。"}
+                  : "ジャンル・作家名を入力（作品名は任意）。画像・略歴・最新はAIが補います。"}
               </p>
               <div className="space-y-3">
                 <div>
@@ -1682,7 +1691,7 @@ export default function LoveArchiveApp() {
                 <input
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="作品名"
+                  placeholder="作品名（任意）"
                   className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-rose-400/50"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
@@ -1881,8 +1890,12 @@ export default function LoveArchiveApp() {
                       >
                         {GENRE_LABEL[item.genre] || GENRE_LABEL.art}
                       </span>
-                      <p className="text-sm font-bold text-white">{item.title}</p>
-                      <p className="text-xs text-rose-300">{item.artist}</p>
+                      <p className="text-sm font-bold text-white">
+                        {displayTitle(item)}
+                      </p>
+                      {item.title.trim() && (
+                        <p className="text-xs text-rose-300">{item.artist}</p>
+                      )}
                       {item.imageUrls?.length > 0 && (
                         <p className="mt-1 text-[10px] text-emerald-300/90">
                           画像 {item.imageUrls.length}/{MAX_ITEM_IMAGES}

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { Genre, GENRE_KEYS } from "@/lib/types";
 
 export const maxDuration = 30;
@@ -42,11 +42,9 @@ export async function POST(req: NextRequest) {
     ? body.excludeUrls.filter(Boolean)
     : [];
 
-  if (!artist || !title) {
-    return NextResponse.json(
-      { error: "artist と title が必要です" },
-      { status: 400 },
-    );
+  // 作品名は任意（作家名だけの登録も許可）
+  if (!artist) {
+    return NextResponse.json({ error: "artist が必要です" }, { status: 400 });
   }
 
   let image = emptyImage();
@@ -101,35 +99,39 @@ async function resolveText(
   title: string,
   officialUrl?: string | null,
 ) {
+  // 作品名は任意。未入力なら作家名だけを対象にする
+  const query = `${artist} ${title}`.trim();
+  const subject = title ? `${artist} の作品『${title}』` : artist;
+  const latestSubject = title ? `『${title}』` : artist;
+
   const sourceUrls = [
     ...(officialUrl
       ? [{ label: "公式サイト", url: officialUrl }]
       : []),
     {
       label: "Wikipedia検索",
-      url: `https://ja.wikipedia.org/w/index.php?search=${encodeURIComponent(`${artist} ${title}`)}`,
+      url: `https://ja.wikipedia.org/w/index.php?search=${encodeURIComponent(query)}`,
     },
     {
       label: "Web検索",
-      url: `https://www.google.com/search?q=${encodeURIComponent(`${artist} ${title}`)}`,
+      url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
     },
   ];
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return {
-      bio: `${artist} の作品『${title}』。略歴の自動要約には GEMINI_API_KEY の設定が必要です。`,
-      latest: `『${title}』の最新情報は下のリンクから確認できます。`,
+      bio: `${subject}。略歴の自動要約には GEMINI_API_KEY の設定が必要です。`,
+      latest: `${latestSubject}の最新情報は下のリンクから確認できます。`,
       sourceUrls,
     };
   }
 
   try {
-    const prompt = `あなたはアート・エンタメのキュレーターです。次の作品について、日本語で簡潔にJSONだけ返してください。説明文は不要です。
+    const prompt = `あなたはアート・エンタメのキュレーターです。次の${title ? "作品" : "作家"}について、日本語で簡潔にJSONだけ返してください。説明文は不要です。
 
 作家名: ${artist}
-作品名: ${title}
-
+${title ? `作品名: ${title}\n` : ""}
 返すべきJSONの形:
 {
   "bio": "作家の略歴を2〜4文",
@@ -149,7 +151,7 @@ async function resolveText(
 
     if (!res.ok) {
       return {
-        bio: `${artist} の作品『${title}』について。`,
+        bio: `${subject}について。`,
         latest: "最新情報の取得に失敗しました。リンクから確認してください。",
         sourceUrls,
       };
@@ -163,7 +165,7 @@ async function resolveText(
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return {
-        bio: `${artist} の作品『${title}』について。`,
+        bio: `${subject}について。`,
         latest: "最新情報はリンクから確認してください。",
         sourceUrls,
       };
@@ -175,7 +177,7 @@ async function resolveText(
     };
 
     return {
-      bio: parsed.bio || `${artist} の作品『${title}』について。`,
+      bio: parsed.bio || `${subject}について。`,
       latest:
         parsed.latest ||
         "最新情報は、公式サイトや関連情報で確認してください。",
@@ -183,7 +185,7 @@ async function resolveText(
     };
   } catch {
     return {
-      bio: `${artist} の作品『${title}』について。`,
+      bio: `${subject}について。`,
       latest: "最新情報はリンクから確認してください。",
       sourceUrls,
     };
@@ -377,11 +379,10 @@ async function findOfficialViaGemini(
   if (!apiKey) return null;
 
   try {
-    const prompt = `次の作品の「公式サイト」または出版社・公式レーベル・制作委員会の公式紹介ページのURLを1つだけJSONで返してください。
+    const prompt = `次の${title ? "作品" : "作家"}の「公式サイト」または出版社・公式レーベル・制作委員会の公式紹介ページのURLを1つだけJSONで返してください。
 
 作家名: ${artist}
-作品名: ${title}
-ジャンル: ${genre}
+${title ? `作品名: ${title}\n` : ""}ジャンル: ${genre}
 
 厳守:
 - Wikipedia・Amazon・楽天・Yahoo・Google・SNS（X/Twitter/Instagram/Facebook/YouTube）・個人ブログは不可
