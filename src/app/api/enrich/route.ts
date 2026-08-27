@@ -71,18 +71,21 @@ export async function POST(req: NextRequest) {
   }
 
   // 3) 自動取得（公式候補スクショ → ジャンル別 → Wikipedia）
-  if (!image.imageUrl) {
-    image = await resolveImage(
-      genre,
-      artist,
-      title,
-      excludeSources,
-      excludeUrls,
-      forceAuto ? null : userOfficialUrl,
-    );
-  }
-
-  const textInfo = await resolveText(artist, title, userOfficialUrl);
+  // 画像と略歴は互いに独立なので並列で取る（直列だと実行時間の上限に届く）
+  const [autoImage, textInfo] = await Promise.all([
+    image.imageUrl
+      ? Promise.resolve(image)
+      : resolveImage(
+          genre,
+          artist,
+          title,
+          excludeSources,
+          excludeUrls,
+          forceAuto ? null : userOfficialUrl,
+        ),
+    resolveText(artist, title, userOfficialUrl),
+  ]);
+  image = autoImage;
 
   return NextResponse.json({
     imageUrl: image.imageUrl,
@@ -563,39 +566,42 @@ async function resolveImage(
     },
   });
 
-  if (genre === "book") {
+  // 作品名がないと成立しない検索は、作品名がある場合だけ試す
+  if (title) {
+    if (genre === "book") {
+      attempts.push({
+        source: "openlibrary",
+        run: () => fetchOpenLibraryCover(artist, title),
+      });
+      attempts.push({
+        source: "googlebooks",
+        run: () => fetchGoogleBooksCover(artist, title),
+      });
+    }
+    if (genre === "movie") {
+      attempts.push({
+        source: "tmdb",
+        run: () => fetchTmdbPoster(artist, title),
+      });
+    }
+    if (genre === "anime") {
+      attempts.push({
+        source: "jikan",
+        run: () => fetchJikanImage(title, artist),
+      });
+    }
+    if (genre === "music") {
+      attempts.push({
+        source: "coverart",
+        run: () => fetchCoverArtArchive(artist, title),
+      });
+    }
     attempts.push({
-      source: "openlibrary",
-      run: () => fetchOpenLibraryCover(artist, title),
-    });
-    attempts.push({
-      source: "googlebooks",
-      run: () => fetchGoogleBooksCover(artist, title),
-    });
-  }
-  if (genre === "movie") {
-    attempts.push({
-      source: "tmdb",
-      run: () => fetchTmdbPoster(artist, title),
-    });
-  }
-  if (genre === "anime") {
-    attempts.push({
-      source: "jikan",
-      run: () => fetchJikanImage(title, artist),
-    });
-  }
-  if (genre === "music") {
-    attempts.push({
-      source: "coverart",
-      run: () => fetchCoverArtArchive(artist, title),
+      source: "wikipedia",
+      run: () => fetchWikipediaImage(artist, title),
     });
   }
 
-  attempts.push({
-    source: "wikipedia",
-    run: () => fetchWikipediaImage(artist, title),
-  });
   attempts.push({
     source: "wikipedia-artist",
     run: () => fetchWikipediaImage(artist, ""),
