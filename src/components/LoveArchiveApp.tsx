@@ -1663,43 +1663,50 @@ export default function LoveArchiveApp() {
                                   : "cursor-pointer border-white/10 bg-black/20 hover:border-rose-400/40"
                             }`}
                           >
-                            {hasImage ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={s.imageUrl}
-                                alt=""
-                                loading="lazy"
-                                className="h-20 w-full bg-black/30 object-cover"
-                                onError={() => {
-                                  setBrokenSuggestImages((prev) => {
-                                    const next = new Set(prev);
-                                    next.add(s.imageUrl!);
-                                    return next;
-                                  });
-                                }}
-                              />
-                            ) : (
-                              <div className="flex h-20 w-full items-center justify-center bg-black/30 text-[9px] text-[var(--muted)]">
-                                画像なし
-                              </div>
-                            )}
-                            {!registered && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void findAnotherCardImage(s);
-                                }}
-                                disabled={loadingCardImage === key}
-                                className="absolute bottom-1 left-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[8px] text-white hover:bg-black/90 disabled:opacity-50"
-                              >
-                                {loadingCardImage === key
-                                  ? "検索中…"
-                                  : hasImage
-                                    ? "他の画像"
-                                    : "画像を探す"}
-                              </button>
-                            )}
+                            <div className="relative h-20 w-full">
+                              {hasImage ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={s.imageUrl}
+                                  alt=""
+                                  loading="lazy"
+                                  className="h-20 w-full bg-black/30 object-cover"
+                                  onError={() => {
+                                    setBrokenSuggestImages((prev) => {
+                                      const next = new Set(prev);
+                                      next.add(s.imageUrl!);
+                                      return next;
+                                    });
+                                  }}
+                                />
+                              ) : (
+                                <div className="flex h-20 w-full items-center justify-center bg-black/30 text-[9px] text-[var(--muted)]">
+                                  画像なし
+                                </div>
+                              )}
+                              {!registered && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void findAnotherCardImage(s);
+                                  }}
+                                  disabled={loadingCardImage === key}
+                                  className="absolute bottom-1 left-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[8px] text-white hover:bg-black/90 disabled:opacity-50"
+                                >
+                                  {loadingCardImage === key
+                                    ? "検索中…"
+                                    : hasImage
+                                      ? "他の画像"
+                                      : "画像を探す"}
+                                </button>
+                              )}
+                              {selected && (
+                                <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] text-white">
+                                  ✓
+                                </span>
+                              )}
+                            </div>
                             <span className="block px-1.5 py-1 text-[10px] leading-tight text-white">
                               {s.title}
                               {s.note ? (
@@ -1716,11 +1723,6 @@ export default function LoveArchiveApp() {
                                 </span>
                               )}
                             </span>
-                            {selected && (
-                              <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] text-white">
-                                ✓
-                              </span>
-                            )}
                           </div>
                         );
                       })}

@@ -53,13 +53,50 @@ export async function POST(req: NextRequest) {
   }
 
   // 作家名のみ → 代表作の候補を返すモード
-  // 1) Gemini（キーがあれば最優先。ジャンル問わず質が高い）
-  const fromGemini = await viaGemini(artist, genre);
+  // Gemini（キーがあれば最優先。ジャンル問わず質が高いが画像は返さない）と
+  // 無料API（画像は取れるがリストの質はまちまち）を並行して取得し、
+  // Geminiの候補リストに無料API側の画像を補って返す
+  const [geminiResult, freeApiResult] = await Promise.allSettled([
+    viaGemini(artist, genre),
+    freeApiItemsByArtist(artist, genre),
+  ]);
+  const fromGemini =
+    geminiResult.status === "fulfilled" ? geminiResult.value : [];
+  const freeItems =
+    freeApiResult.status === "fulfilled" ? freeApiResult.value : [];
+
   if (fromGemini.length > 0) {
-    return NextResponse.json({ items: fromGemini.slice(0, 12) });
+    const imageByTitle = new Map<string, string>();
+    for (const it of freeItems) {
+      if (it.imageUrl) {
+        const key = normKey(it.title);
+        if (!imageByTitle.has(key)) imageByTitle.set(key, it.imageUrl);
+      }
+    }
+    const merged = fromGemini.map((it) =>
+      it.imageUrl
+        ? it
+        : { ...it, imageUrl: imageByTitle.get(normKey(it.title)) },
+    );
+    return NextResponse.json({ items: merged.slice(0, 12) });
   }
 
-  // 2) ジャンル別の無料API
+  return NextResponse.json({ items: dedupe(freeItems).slice(0, 12) });
+}
+
+/** 表記ゆれを吸収した比較用キー（同じ作品名かどうかの突き合わせに使う） */
+function normKey(s: string) {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/[\s　:：・「」『』()（）\-–—]/g, "");
+}
+
+/** ジャンル別の無料APIを試し、ダメならWikidataへ（画像を持つ候補を集める） */
+async function freeApiItemsByArtist(
+  artist: string,
+  genre: Genre,
+): Promise<SuggestItem[]> {
   let items: SuggestItem[] = [];
   try {
     if (genre === "book") items = await viaBooks(artist);
@@ -68,8 +105,6 @@ export async function POST(req: NextRequest) {
   } catch {
     items = [];
   }
-
-  // 3) Wikidata（汎用フォールバック）
   if (items.length === 0) {
     try {
       items = await viaWikidata(artist);
@@ -77,8 +112,7 @@ export async function POST(req: NextRequest) {
       items = [];
     }
   }
-
-  return NextResponse.json({ items: dedupe(items).slice(0, 12) });
+  return items;
 }
 
 function dedupe(items: SuggestItem[]): SuggestItem[] {
@@ -119,9 +153,44 @@ async function findWorksByTitle(
   title: string,
   genre: Genre,
 ): Promise<SuggestItem[]> {
-  const fromGemini = await viaGeminiByTitle(title, genre);
-  if (fromGemini.length > 0) return fromGemini;
+  const [geminiResult, freeApiResult] = await Promise.allSettled([
+    viaGeminiByTitle(title, genre),
+    freeApiItemsByTitle(title, genre),
+  ]);
+  const fromGemini =
+    geminiResult.status === "fulfilled" ? geminiResult.value : [];
+  const freeItems =
+    freeApiResult.status === "fulfilled" ? freeApiResult.value : [];
 
+  if (fromGemini.length > 0) {
+    // 同じ作品名でも作家が違えば別作品なので、作家名も一致した場合だけ画像を補う
+    const imageByKey = new Map<string, string>();
+    for (const it of freeItems) {
+      if (it.imageUrl) {
+        const key = `${normKey(it.artist || "")}::${normKey(it.title)}`;
+        if (!imageByKey.has(key)) imageByKey.set(key, it.imageUrl);
+      }
+    }
+    return fromGemini.map((it) =>
+      it.imageUrl
+        ? it
+        : {
+            ...it,
+            imageUrl: imageByKey.get(
+              `${normKey(it.artist || "")}::${normKey(it.title)}`,
+            ),
+          },
+    );
+  }
+
+  return freeItems;
+}
+
+/** ジャンル別の無料APIを試し、ダメならWikidataへ（作品名だけで検索） */
+async function freeApiItemsByTitle(
+  title: string,
+  genre: Genre,
+): Promise<SuggestItem[]> {
   let items: SuggestItem[] = [];
   try {
     if (genre === "book") items = await viaBooksByTitle(title);
