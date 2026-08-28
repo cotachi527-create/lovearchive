@@ -3,6 +3,16 @@ import { Genre, GENRE_KEYS } from "@/lib/types";
 
 export const maxDuration = 30;
 
+/** Geminiに「作品」の範囲を具体的に伝えるためのジャンル別の言い回し */
+const GENRE_WORK_NOUN: Record<Genre, string> = {
+  art: "作品（絵画・写真集・シリーズなど）のタイトル",
+  game: "ゲームタイトル",
+  movie: "映画タイトル",
+  book: "書籍タイトル",
+  anime: "アニメ映画・アニメシリーズのタイトル",
+  music: "アルバム・楽曲タイトル",
+};
+
 type SuggestItem = {
   title: string;
   note?: string;
@@ -218,9 +228,14 @@ async function viaGeminiByTitle(
   if (!apiKey) return [];
 
   try {
-    const prompt = `作品名「${title}」（ジャンル: ${genre}）に一致する実在の作品を、作家名（著者・監督・アーティストなど）とともに日本語でJSONだけ返してください。同名の作品が複数の作家に存在する場合は、それぞれ別の候補として含めてください。実在が確実なもののみ最大6件。
+    const prompt = `「${title}」に一致する実在の${GENRE_WORK_NOUN[genre]}を、作家名（著者・監督・アーティストなど）とともに日本語でJSONだけ返してください。
 
-{"items":[{"title":"作品名","artist":"作家名","note":"発表年など一言（不明なら省略）"}]}`;
+厳守:
+- 独立した作品タイトルのみが対象。登場人物名やシーン名との混同に注意
+- 同名の作品が複数の作家に存在する場合は、それぞれ別の候補として含める
+- 実在が確実なもののみ最大6件
+
+{"items":[{"title":"作品タイトル","artist":"作家名","note":"発表年など一言（不明なら省略）"}]}`;
     const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const res = await fetch(url, {
@@ -611,9 +626,14 @@ async function viaGemini(artist: string, genre: Genre): Promise<SuggestItem[]> {
   if (!apiKey) return [];
 
   try {
-    const prompt = `「${artist}」（ジャンル: ${genre}）の代表的な作品名を、日本語でJSONだけ返してください。実在が確実な作品のみ、有名順に最大10件。
+    const prompt = `「${artist}」が手がけた${GENRE_WORK_NOUN[genre]}を、日本語でJSONだけ返してください。
 
-{"items":[{"title":"作品名","note":"発表年など一言（不明なら省略）"}]}`;
+厳守:
+- 独立した作品タイトルのみ。登場人物名・キャラクター名・シーン名・章タイトルは含めない
+- 実在が確実なものだけ、代表的な順に最大8件
+- 同じ作品を重複させない
+
+{"items":[{"title":"作品タイトル","note":"発表年など一言（不明なら省略）"}]}`;
     const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const res = await fetch(url, {
