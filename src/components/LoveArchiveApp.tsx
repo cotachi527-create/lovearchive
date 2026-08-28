@@ -1153,6 +1153,19 @@ export default function LoveArchiveApp() {
     savePreferences(next);
   };
 
+  /** 「今日の一枚」の状態を今日分だけリセットし、また出せるようにする */
+  const resetDailyDraw = () => {
+    saveDailyState({ date: todayKey(), mainPieceId: null, extraPieceIds: [] });
+    setHasDrawnToday(false);
+    setCurrent(null);
+    setEnrichment(null);
+    setUsedImageSources([]);
+    setUsedImageUrls([]);
+    setAltImageNote(null);
+    setError(null);
+    setLocalSaveNote("今日の分をリセットしました。また「今日の一枚」から引けます。");
+  };
+
   /** コレクション一式を JSON ファイルとしてダウンロード（idb 画像は data URL に展開） */
   const [exporting, setExporting] = useState(false);
   const exportCollection = async () => {
@@ -2161,6 +2174,24 @@ export default function LoveArchiveApp() {
                 {exporting
                   ? "書き出し中…"
                   : `コレクションをダウンロード（${collection.length} 件）`}
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <h2 className="mb-1 text-lg font-bold text-white">
+                今日の一枚をリセット
+              </h2>
+              <p className="mb-3 text-xs leading-relaxed text-[var(--muted)]">
+                今日すでに引いた「今日の一枚」「もう一枚」の記録を消して、
+                最初からまた引けるようにします。コレクションの内容は変わりません。
+              </p>
+              <button
+                type="button"
+                onClick={resetDailyDraw}
+                disabled={!hasDrawnToday}
+                className="rounded-full bg-rose-500 px-4 py-2 text-xs font-bold text-white hover:bg-rose-400 disabled:opacity-40"
+              >
+                今日の分をリセット
               </button>
             </div>
 
