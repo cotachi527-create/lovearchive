@@ -353,7 +353,7 @@ async function fetchPageScreenshot(pageUrl: string): Promise<ImageResult> {
 
   try {
     const api = `https://api.microlink.io/?url=${encodeURIComponent(pageUrl)}&screenshot=true&meta=false&viewport.width=1280&viewport.height=800`;
-    const res = await fetch(api, { signal: AbortSignal.timeout(25000) });
+    const res = await fetch(api, { signal: AbortSignal.timeout(12000) });
     if (res.ok) {
       const data = await res.json();
       const shotUrl = data?.data?.screenshot?.url as string | undefined;
@@ -374,7 +374,7 @@ async function fetchPageScreenshot(pageUrl: string): Promise<ImageResult> {
     const head = await fetch(thum, {
       method: "GET",
       redirect: "follow",
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(10000),
     });
     if (head.ok) {
       return {
@@ -433,6 +433,7 @@ ${title ? `作品名: ${title}\n` : ""}ジャンル: ${genre}
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.1 },
       }),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -578,25 +579,6 @@ async function resolveImage(
     run: () => Promise<ImageResult>;
   }> = [];
 
-  // 公式サイトのスクリーンショットを最優先
-  attempts.push({
-    source: "screenshot",
-    run: async () => {
-      const page =
-        (preferredOfficialUrl && isSafePublicUrl(preferredOfficialUrl)
-          ? preferredOfficialUrl
-          : null) || (await findOfficialPageUrl(artist, title, genre));
-      if (!page) return emptyImage();
-      const shot = await fetchPageScreenshot(page);
-      if (!shot.imageUrl) return emptyImage();
-      return {
-        ...shot,
-        imageCredit: "公式サイトのスクリーンショット",
-        imageSource: "screenshot",
-      };
-    },
-  });
-
   // 作品名がないと成立しない検索は、作品名がある場合だけ試す
   if (title) {
     if (genre === "book") {
@@ -636,6 +618,25 @@ async function resolveImage(
   attempts.push({
     source: "wikipedia-artist",
     run: () => fetchWikipediaImage(artist, ""),
+  });
+
+  // 公式サイトのスクリーンショットは最後の手段（Gemini呼び出し＋外部サービスで重いため）
+  attempts.push({
+    source: "screenshot",
+    run: async () => {
+      const page =
+        (preferredOfficialUrl && isSafePublicUrl(preferredOfficialUrl)
+          ? preferredOfficialUrl
+          : null) || (await findOfficialPageUrl(artist, title, genre));
+      if (!page) return emptyImage();
+      const shot = await fetchPageScreenshot(page);
+      if (!shot.imageUrl) return emptyImage();
+      return {
+        ...shot,
+        imageCredit: "公式サイトのスクリーンショット",
+        imageSource: "screenshot",
+      };
+    },
   });
 
   const deadline = Date.now() + IMAGE_BUDGET_MS;
