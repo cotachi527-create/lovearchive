@@ -82,6 +82,8 @@ export default function LoveArchiveApp() {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [loadingFeed, setLoadingFeed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 今日出せる作品を出し切ったときだけ true。エラー欄にリセットボタンを出す */
+  const [dailyExhausted, setDailyExhausted] = useState(false);
   const [hasDrawnToday, setHasDrawnToday] = useState(false);
   const [localFolder, setLocalFolder] = useState<LocalFolderStatus>({
     supported: false,
@@ -803,6 +805,7 @@ export default function LoveArchiveApp() {
 
   const drawPiece = async (mode: "main" | "extra") => {
     setError(null);
+    setDailyExhausted(false);
     if (collection.length === 0) {
       setError("先にコレクションへ作家名を登録してください。");
       setPanel("collection");
@@ -830,11 +833,14 @@ export default function LoveArchiveApp() {
 
       const picked = pickPiece(collection, mode === "extra" ? exclude : []);
       if (!picked) {
-        setError(
-          mode === "extra"
-            ? "今日出せる作品は出し切りました。また明日、新しい一枚をお楽しみに。"
-            : "出せる作品がありません。コレクションを増やしてください。",
-        );
+        if (mode === "extra") {
+          setDailyExhausted(true);
+          setError(
+            "今日出せる作品は出し切りました。また明日、新しい一枚をお楽しみに。",
+          );
+        } else {
+          setError("出せる作品がありません。コレクションを増やしてください。");
+        }
         return;
       }
 
@@ -1163,6 +1169,7 @@ export default function LoveArchiveApp() {
     setUsedImageUrls([]);
     setAltImageNote(null);
     setError(null);
+    setDailyExhausted(false);
     setLocalSaveNote("今日の分をリセットしました。また「今日の一枚」から引けます。");
   };
 
@@ -1303,8 +1310,17 @@ export default function LoveArchiveApp() {
         </nav>
 
         {error && (
-          <div className="mb-4 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
-            {error}
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
+            <span>{error}</span>
+            {dailyExhausted && (
+              <button
+                type="button"
+                onClick={resetDailyDraw}
+                className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/15"
+              >
+                リセット
+              </button>
+            )}
           </div>
         )}
         {localSaveNote && (
@@ -1332,7 +1348,7 @@ export default function LoveArchiveApp() {
                 }`}
               >
                 <span
-                  className={`text-center font-bold leading-tight text-white ${
+                  className={`text-center font-bold leading-none text-white ${
                     current ? "text-[10px]" : "text-sm"
                   }`}
                 >
