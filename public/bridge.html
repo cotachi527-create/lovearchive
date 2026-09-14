@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>ラブアカ連携</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; font: 14px/1.7 system-ui, sans-serif; text-align: center; color: #444; background: #fff8f5; }
+</style>
+</head>
+<body>
+<p id="msg">AIダッシュボードへコレクションを送っています…</p>
+<script>
+  // AIダッシュボードの「ラブアカ」欄にコレクションを渡すための連携ページ
+  // ダッシュボードからポップアップで開かれ、許可したオリジンにだけ postMessage で返す
+  (() => {
+    const ALLOWED = [/^https:\/\/ai-kamado\.vercel\.app$/, /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/];
+    const THUMB_SIZE = 320;
+    const msg = document.getElementById("msg");
+
+    if (!window.opener) {
+      msg.textContent = "このページは AIダッシュボード連携用です。";
+      return;
+    }
+
+    function readJson(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
+    // src/lib/mediaStore.ts と同じ DB（idb:<id> の画像本体）
+    function openMedia() {
+      return new Promise((resolve) => {
+        const req = indexedDB.open("lovearchive-media");
+        req.onupgradeneeded = () => {
+          if (!req.result.objectStoreNames.contains("media")) req.result.createObjectStore("media");
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      });
+    }
+
+    function mediaGet(db, id) {
+      return new Promise((resolve) => {
+        if (!db) return resolve(null);
+        try {
+          const r = db.transaction("media", "readonly").objectStore("media").get(id);
+          r.onsuccess = () => resolve(typeof r.result === "string" ? r.result : null);
+          r.onerror = () => resolve(null);
+        } catch {
+          resolve(null);
+        }
+      });
+    }
+
+    // 画像本体は大きいので、ダッシュボードにはサムネイルだけ渡す
+    function shrink(dataUrl) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const scale = Math.min(1, THUMB_SIZE / Math.max(img.naturalWidth, img.naturalHeight));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.8));
+        };
+        img.onerror = () => resolve("");
+        img.src = dataUrl;
+      });
+    }
+
+    function absoluteUrl(url) {
+      try {
+        return new URL(url, document.baseURI).href;
+      } catch {
+        return "";
+      }
+    }
+
+    async function thumbFor(item, db, enrich) {
+      const first = (Array.isArray(item.imageUrls) && item.imageUrls[0]) || item.imageUrl || "";
+      if (first.startsWith("idb:")) {
+        const data = await mediaGet(db, first.slice("idb:".length));
+        return data ? shrink(data) : "";
+      }
+      if (first.startsWith("data:image/")) return shrink(first);
+      if (first) return absoluteUrl(first);
+
+      // 手動画像がなければ自動取得した画像（src/lib/storage.ts の cacheKey と同じ形式）
+      const key = [item.genre, item.artist, item.title]
+        .map((s) => String(s || "").trim())
+        .join("::")
+        .toLowerCase();
+      const cached = enrich[key];
+      return cached && typeof cached.imageUrl === "string" && !cached.imageUrl.startsWith("data:")
+        ? absoluteUrl(cached.imageUrl)
+        : "";
+    }
+
+    async function collect() {
+      const items = readJson("lovearchive.collection", []);
+      const enrich = readJson("lovearchive.enrichCache", {});
+      const db = await openMedia();
+      const out = [];
+      for (const item of Array.isArray(items) ? items : []) {
+        if (!item || typeof item !== "object") continue;
+        out.push({
+          id: item.id,
+          title: item.title,
+          artist: item.artist,
+          genre: item.genre,
+          createdAt: item.createdAt,
+          thumb: await thumbFor(item, db, enrich),
+        });
+      }
+      return out;
+    }
+
+    let sent = false;
+    window.addEventListener("message", async (e) => {
+      if (!ALLOWED.some((re) => re.test(e.origin)) || !e.data || typeof e.data !== "object") return;
+      if (e.data.type === "lovearchive:request" && !sent) {
+        sent = true;
+        try {
+          const items = await collect();
+          e.source.postMessage({ type: "lovearchive:collection", items }, e.origin);
+          msg.textContent = `${items.length} 件を送りました。`;
+        } catch {
+          msg.textContent = "コレクションを読み込めませんでした。このウィンドウを閉じて、もう一度お試しください。";
+        }
+      } else if (e.data.type === "lovearchive:done") {
+        window.close();
+      }
+    });
+
+    // 受け取り側の準備合図（データは含めない）
+    window.opener.postMessage({ type: "lovearchive:ready" }, "*");
+    setTimeout(() => {
+      if (!sent) msg.textContent = "ダッシュボードから応答がありません。このウィンドウを閉じて、もう一度お試しください。";
+    }, 10000);
+  })();
+</script>
+</body>
+</html>
